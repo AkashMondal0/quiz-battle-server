@@ -1,43 +1,31 @@
 import {
+  Inject,
   Injectable,
 } from '@nestjs/common';
 
-import {
-  DatabaseService,
-} from '@app/database';
-import { EventsSchema } from '@app/database/db/schemas';
-import { RABBITMQ_EVENTS, RabbitMQService } from '@app/rabbitmq';
+import { ClientProxy } from '@nestjs/microservices';
 
 @Injectable()
 export class EventsService {
-  constructor(
-    private readonly database: DatabaseService,
-    private readonly rabbitmq: RabbitMQService,
-  ) { }
+  // constructor(
+  //   @Inject('NOTIFICATION_SERVICE')
+  //   private readonly notificationClient: ClientProxy,
+  // ) {}
 
-  async findAll() {
-    return this.database.db
-      .select()
-      .from(EventsSchema)
-      .limit(10);
-  }
+  // async createEvent() {
+  //   const event = {
+  //     eventId: 'event-123',
+  //     title: 'JoySpot Test Event',
+  //     createdBy: 'user-123',
+  //   };
 
-  async createEvent(
-    data: any,
-  ) {
+  //   console.log('🎯 Event created:', event);
 
-    const event = {
-      title: "Text",
-      description: "Text from server event service",
-      categoryId: 1,
-      createdBy: 1,
-    }
+  //   this.notificationClient.emit(
+  //     'event.created',
+  //     event,
+  //   );
 
-    this.rabbitmq.emit(
-      RABBITMQ_EVENTS.EVENT_CREATED,
-      event,
-    );
-
-    return event;
-  }
+  //   return event;
+  // }
 }

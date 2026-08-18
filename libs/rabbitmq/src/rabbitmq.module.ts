@@ -19,15 +19,11 @@ import { RabbitMQService } from './rabbitmq.service';
               'amqp://guest:guest@localhost:5672',
           ],
 
-          queue:
-            process.env.RABBITMQ_QUEUE ||
-            'event-finder',
+          queue: process.env.RABBITMQ_QUEUE || 'notification-service',
 
           queueOptions: {
             durable: true,
           },
-
-          persistent: true,
         },
       },
     ]),
@@ -40,4 +36,5 @@ import { RabbitMQService } from './rabbitmq.service';
     RabbitMQService,
   ],
 })
+
 export class RabbitMQModule {}

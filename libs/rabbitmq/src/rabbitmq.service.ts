@@ -18,24 +18,22 @@ import {
 
 @Injectable()
 export class RabbitMQService
-  implements OnModuleInit
-{
+  implements OnModuleInit {
   constructor(
     @Inject(RABBITMQ_CLIENT)
     private readonly client: ClientProxy,
-  ) {}
+  ) { }
 
   async onModuleInit() {
     await this.client.connect();
   }
 
-  emit<T = unknown>(
+  async emit<T = unknown>(
     pattern: string,
     data: T,
   ) {
-    return this.client.emit(
-      pattern,
-      data,
+    return await firstValueFrom(
+      this.client.emit(pattern, data),
     );
   }
 

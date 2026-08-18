@@ -1,42 +1,18 @@
-import { Controller, Get } from '@nestjs/common';
-import { NotificationServiceService } from './notification-service.service';
-import { EventPattern } from '@nestjs/microservices';
-import { RABBITMQ_EVENTS } from '@app/rabbitmq';
-
+import { NOTIFICATION_PATTERNS } from '@app/config/patterns/notification-patterns';
+import { Controller } from '@nestjs/common';
+import { EventPattern, MessagePattern } from '@nestjs/microservices';
 
 @Controller()
 export class NotificationServiceController {
-  constructor(private readonly notificationServiceService: NotificationServiceService) {}
 
-  @EventPattern(
-    RABBITMQ_EVENTS.EVENT_CREATED,
-  )
-  async handleEventCreated(
-    data: {
-      eventId: string;
-      title: string;
-      createdBy: string;
-    },
-  ) {
+  @MessagePattern(NOTIFICATION_PATTERNS.EVENT_CREATED)
+  async handleEventCreated(data: any) {
+    console.log('Received:', data);
 
-    console.log(
-      'New event:',
+    return {
+      success: true,
       data,
-    );
-
-    await this.sendNotification(data);
-  }
-
-  private async sendNotification(
-    data: any,
-  ) {
-    console.log(
-      'Sending notification for event:',
-      data,
-    );
-    // Push notification
-    // FCM
-    // Email
-    // In-app notification
+      message: 'Event processed successfully',
+    };
   }
 }

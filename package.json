@@ -17,7 +17,20 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./apps/api-gateway/test/jest-e2e.json"
+    "test:e2e": "jest --config ./apps/api-gateway/test/jest-e2e.json",
+
+    "drizzle-kit": "drizzle-kit",
+    "drizzle-kit:generate": "drizzle-kit generate",
+    "drizzle-kit:push": "drizzle-kit push",
+    "drizzle-kit:pull": "drizzle-kit pull",
+
+    "dev": "nest start --watch api-gateway",
+    "app:api-gateway": "nest start --watch api-gateway",
+    "app:event": "nest start --watch event-service",
+    "app:auth": "nest start --watch auth-service",
+    "app:notification": "nest start --watch notification-service",
+    "app:realtime": "nest start --watch realtime-service",
+    "app:worker": "nest start --watch worker-service"
   },
   "dependencies": {
     "@nestjs/bullmq": "^11.0.3",
