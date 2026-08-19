@@ -1,3 +1,4 @@
+import { ConfigService } from '@app/config';
 import {
   Injectable,
   OnModuleDestroy,
@@ -7,15 +8,21 @@ import Redis from 'ioredis';
 
 @Injectable()
 export class RedisService
-  implements OnModuleDestroy
-{
+  implements OnModuleDestroy {
   private readonly client: Redis;
 
-  constructor() {
-    this.client = new Redis(
-      process.env.REDIS_URL ||
-        'redis://localhost:6379',
-    );
+  constructor(
+    private readonly configService: ConfigService,
+  ) {
+    const redisUrl = this.configService.getEnv("REDIS_URL");
+
+    if (!redisUrl) {
+      throw new Error(
+        'REDIS_URL environment variable is not defined',
+      );
+    }
+
+    this.client = new Redis(redisUrl);
   }
 
   async get<T>(
