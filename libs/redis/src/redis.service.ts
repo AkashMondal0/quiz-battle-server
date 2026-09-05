@@ -9,7 +9,7 @@ import Redis from 'ioredis';
 @Injectable()
 export class RedisService
   implements OnModuleDestroy {
-  private readonly client: Redis;
+  readonly client: Redis;
 
   constructor(
     private readonly configService: ConfigService,

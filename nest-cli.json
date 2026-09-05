@@ -91,6 +91,15 @@
         "tsConfigPath": "apps/notification-service/tsconfig.app.json"
       }
     },
+    "quiz-battle-service": {
+      "type": "application",
+      "root": "apps/quiz-battle-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/quiz-battle-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/quiz-battle-service/tsconfig.app.json"
+      }
+    },
     "rabbitmq": {
       "type": "library",
       "root": "libs/rabbitmq",
