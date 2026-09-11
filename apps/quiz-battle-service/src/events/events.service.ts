@@ -14,6 +14,7 @@ interface SocketUser {
   id: string;
   username: string;
   profilePicture?: string;
+  avatarId?: string;
 }
 
 @Injectable()
@@ -70,6 +71,7 @@ export class EventsService {
       id,
       username,
       profilePicture,
+      avatarId
     } = client.handshake.query;
 
     if (
@@ -100,6 +102,10 @@ export class EventsService {
       profilePicture:
         typeof profilePicture === 'string'
           ? profilePicture
+          : undefined,
+      avatarId:
+        typeof avatarId === 'string'
+          ? avatarId
           : undefined,
     };
   }

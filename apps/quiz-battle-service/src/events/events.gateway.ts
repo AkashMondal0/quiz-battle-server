@@ -20,6 +20,7 @@ import {
 import {
   EventsService,
 } from './events.service';
+import { QuizBattleService } from '../quiz-battle-service.service';
 
 @WebSocketGateway({
   namespace: '/event',
@@ -48,11 +49,10 @@ export class EventsGateway {
 
   constructor(
     private readonly eventsService: EventsService,
-  ) {}
+    private readonly quizBattleService: QuizBattleService
 
-  /**
-   * Socket.IO server initialized.
-   */
+  ) { }
+
   afterInit(server: Server): void {
     this.eventsService.setSocket(
       server,
@@ -63,9 +63,6 @@ export class EventsGateway {
     );
   }
 
-  /**
-   * Client connected.
-   */
   async handleConnection(
     client: Socket,
   ): Promise<void> {
@@ -117,9 +114,6 @@ export class EventsGateway {
     }
   }
 
-  /**
-   * Client disconnected.
-   */
   async handleDisconnect(
     client: Socket,
   ): Promise<void> {
@@ -132,84 +126,102 @@ export class EventsGateway {
     );
   }
 
-  /**
-   * Normal message.
-   */
-  @SubscribeMessage('message')
-  handleMessage(
+
+  @SubscribeMessage('battle:join')
+  handleJoinRoom(
     @ConnectedSocket()
     client: Socket,
-
     @MessageBody()
-    data: unknown,
+    data: {
+      roomId: string;
+    },
   ) {
-    this.logger.debug(
-      `Message from ${client.id}: ${JSON.stringify(data)}`,
+
+    const user = this.eventsService.extractUserFromSocket(
+      client,
     );
 
-    client.emit('message', {
-      success: true,
-      data,
-    });
+    if (!user) {
+      this.logger.warn(
+        `Invalid user information for client: ${client.id}`,
+      );
 
-    return {
-      success: true,
-    };
+      return;
+    }
+
+    this.quizBattleService.joinRoom(data.roomId, {
+      userId: user?.id as string,
+      username: user?.username as string,
+      profilePicture: user?.profilePicture as string | null,
+      avatarId: user?.avatarId as string | null,
+    }, (async (state) => {
+      const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map(p => p.userId));
+      this.server.to(socketIds).emit('battle:lobby', state);
+    }));
+    setTimeout(() => {
+      this.quizBattleService.joinRoom(data.roomId, {
+        userId: user?.id as string,
+        username: user?.username as string,
+        profilePicture: user?.profilePicture as string | null,
+        avatarId: user?.avatarId as string | null,
+      }, (async (state) => {
+        const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map(p => p.userId));
+        this.server.to(socketIds).emit('battle:lobby', state);
+      }));
+    }, 1000)
   }
 
-  /**
-   * Send message to users.
-   */
-  @SubscribeMessage('send-message')
-  async sendMessage(
+  @SubscribeMessage('battle:create')
+  handleCreateRoom(
     @ConnectedSocket()
     client: Socket,
 
     @MessageBody()
     data: {
-      members: string[];
-      message: string;
-    },
+      topic: string;
+      aiModelId: string;
+      aiBackendId: string;
+      gameMode: string;
+      playerCount: number;
+      difficulty: string;
+      questionCount: number;
+      secondsPerQuestion: number;
+      isPrivate: boolean;
+    }
   ) {
-    if (
-      !Array.isArray(data?.members) ||
-      data.members.length === 0
-    ) {
-      return {
-        success: false,
-        message:
-          'members must be a non-empty array',
-      };
+
+    const user = this.eventsService.extractUserFromSocket(client);
+
+    if (!user) {
+      this.logger.warn(`Invalid user information for client: ${client.id}`);
+      return;
     }
 
-    await this.eventsService.sendMessageToUsers(
-      data.members,
-      {
-        senderSocketId: client.id,
-        message: data.message,
-      },
-    );
-
-    return {
-      success: true,
-    };
+    setTimeout(() => {
+      this.quizBattleService.createRoom({
+        aiId: data.aiModelId,
+        mode: data.gameMode,
+        difficulty: data.difficulty,
+        visibility: data.isPrivate ? 'private' : 'public',
+        maxPlayers: data.playerCount,
+        topic: data.topic,
+        prompt: "",
+        host: {
+          userId: user.id as string,
+          username: user.username as string,
+          profilePicture: user.profilePicture as string | null,
+          avatarId: user.avatarId as string | null,
+        },
+        numberOfQuestions: data.questionCount,
+        totalTimeSeconds: data.secondsPerQuestion * data.questionCount,
+      }, (state) => {
+        // console.log("Sending room state to client:", state);
+        this.server.to(client.id).emit('battle:lobby', state);
+      })
+    }, 1000)
   }
 
-  /**
-   * ACK example.
-   */
-  @SubscribeMessage('events')
-  handleEvent(
-    @MessageBody()
-    data: string,
-  ) {
-    return {
-      status: 'received',
-      data,
-    };
-  }
-
-  send(){
+  send() {
     this.server.emit('message', 'Hello World! Events service is working!');
   }
 }
