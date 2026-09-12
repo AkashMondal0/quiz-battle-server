@@ -55,7 +55,7 @@ export class QuizBattleService {
 
     private readonly rankingService:
       QuizBattleRankingService,
-  ) {}
+  ) { }
 
   // ============================================================
   // CREATE ROOM
@@ -67,163 +67,163 @@ export class QuizBattleService {
       state: unknown,
     ) => void,
   ) {
-   try {
-     const host =
-      body.host;
+    try {
+      const host =
+        body.host;
 
-    const roomCode =
-      this.generateRoomCode();
+      const roomCode =
+        this.generateRoomCode();
 
-    const now =
-      Date.now();
+      const now =
+        Date.now();
 
-    const room:
-      RoomSessionDetails = {
-      roomId: roomCode,
+      const room:
+        RoomSessionDetails = {
+        roomId: roomCode,
 
-      roomCode,
+        roomCode,
 
-      hostId:
-        host.userId,
+        hostId:
+          host.userId,
 
-      topic:
-        body.topic,
+        topic:
+          body.topic,
 
-      prompt:
-        body.prompt ?? '',
+        prompt:
+          body.prompt ?? '',
 
-      aiId:
-        body.aiId,
+        aiId:
+          body.aiId,
 
-      mode:
-        body.mode,
+        mode:
+          body.mode,
 
-      difficulty:
-        body.difficulty,
+        difficulty:
+          body.difficulty,
 
-      visibility:
-        body.visibility,
+        visibility:
+          body.visibility,
 
-      maxPlayers:
-        body.maxPlayers,
+        maxPlayers:
+          body.maxPlayers,
 
-      numberOfQuestions:
-        body.numberOfQuestions,
+        numberOfQuestions:
+          body.numberOfQuestions,
 
-      totalTimeSeconds:
-        body.totalTimeSeconds,
+        totalTimeSeconds:
+          body.totalTimeSeconds,
 
-      status:
-        'WAITING',
+        status:
+          'WAITING',
 
-      currentQuestionIndex:
-        -1,
+        currentQuestionIndex:
+          -1,
 
-      createdAt:
-        now,
-    };
-
-    const hostUser:
-      RoomSessionUser = {
-      userId:
-        host.userId,
-
-      username:
-        host.username,
-
-      profilePicture:
-        host.profilePicture ?? null,
-
-      avatarId:
-        host.avatarId ?? null,
-
-      status:
-        'CONNECTED',
-
-      ready:
-        false,
-
-      joinedAt:
-        now,
-
-      lastSeenAt:
-        now,
-
-      score:
-        0,
-
-      correctAnswers:
-        0,
-
-      incorrectAnswers:
-        0,
-
-      answeredQuestions:
-        0,
-
-      rank:
-        1,
-
-      hasAnsweredCurrentQuestion:
-        false,
-
-      answeredQuestionIds:
-        new Set<string>(),
-    };
-
-    const session:
-      RoomSession = {
-      room,
-
-      users:
-        new Map([
-          [
-            host.userId,
-            hostUser,
-          ],
-        ]),
-
-      ranking: {
-        roomId: room.roomId,
-
-        rankings: [],
-
-        updatedAt:
+        createdAt:
           now,
-      },
+      };
 
-      questions: [],
-    };
+      const hostUser:
+        RoomSessionUser = {
+        userId:
+          host.userId,
 
-    this.rankingService
-      .updateRanking(
+        username:
+          host.username,
+
+        profilePicture:
+          host.profilePicture ?? null,
+
+        avatarId:
+          host.avatarId ?? null,
+
+        status:
+          'CONNECTED',
+
+        ready:
+          false,
+
+        joinedAt:
+          now,
+
+        lastSeenAt:
+          now,
+
+        score:
+          0,
+
+        correctAnswers:
+          0,
+
+        incorrectAnswers:
+          0,
+
+        answeredQuestions:
+          0,
+
+        rank:
+          1,
+
+        hasAnsweredCurrentQuestion:
+          false,
+
+        answeredQuestionIds:
+          new Set<string>(),
+      };
+
+      const session:
+        RoomSession = {
+        room,
+
+        users:
+          new Map([
+            [
+              host.userId,
+              hostUser,
+            ],
+          ]),
+
+        ranking: {
+          roomId: room.roomId,
+
+          rankings: [],
+
+          updatedAt:
+            now,
+        },
+
+        questions: [],
+      };
+
+      this.rankingService
+        .updateRanking(
+          session,
+        );
+
+      this.sessions.set(
+        session.room.roomId,
         session,
       );
 
-    this.sessions.set(
-      session.room.roomId,
-      session,
-    );
+      await this.saveSessionToRedis(
+        session,
+      );
 
-    await this.saveSessionToRedis(
-      session,
-    );
+      const state = this.createRoomState(
+        session,
+        host.userId,
+      );
 
-    const state = this.createRoomState(
-      session,
-      host.userId,
-    );
-
-    socketCallbackWithRoomState(state);
-    return;
-   } catch (error) {
-     this.logger.error(
-       'Error creating room',
-       error instanceof Error
-         ? error.stack
-         : String(error),
-     );
-   }
+      socketCallbackWithRoomState(state);
+      return;
+    } catch (error) {
+      this.logger.error(
+        'Error creating room',
+        error instanceof Error
+          ? error.stack
+          : String(error),
+      );
+    }
   }
 
   // ============================================================
@@ -286,32 +286,129 @@ export class QuizBattleService {
       state: BattleState,
     ) => void,
   ) {
-    const session =
-      await this.getRoom(roomId);
+    try {
+      const session =
+        await this.getRoom(roomId);
 
-    const existing =
-      session.users.get(
-        user.userId,
-      );
+      const existing =
+        session.users.get(
+          user.userId,
+        );
 
-    if (existing) {
-      if (
-        existing.status ===
-        'LEFT'
-      ) {
-        throw new ConflictException(
-          'You have left this match',
+      if (existing) {
+        if (
+          existing.status ===
+          'LEFT'
+        ) {
+          throw new ConflictException(
+            'You have left this match',
+          );
+        }
+
+        existing.status =
+          'CONNECTED';
+
+        existing.lastSeenAt =
+          Date.now();
+
+        existing.disconnectedAt =
+          undefined;
+
+        await this.saveSessionToRedis(
+          session,
+        );
+
+        socketCallbackWithRoomState(
+          this.createRoomState(
+            session,
+            user.userId,
+          ),
         );
       }
 
-      existing.status =
-        'CONNECTED';
+      if (
+        session.room.status !==
+        'WAITING'
+      ) {
+        throw new ConflictException(
+          'Game has already started',
+        );
+      }
 
-      existing.lastSeenAt =
+      const playerCount =
+        this.getActivePlayerCount(
+          session,
+        );
+
+      if (
+        playerCount >=
+        session.room.maxPlayers
+      ) {
+        throw new ConflictException(
+          'Room is full',
+        );
+      }
+
+      const now =
         Date.now();
 
-      existing.disconnectedAt =
-        undefined;
+      const newUser:
+        RoomSessionUser = {
+        userId:
+          user.userId,
+
+        username:
+          user.username,
+
+        profilePicture:
+          user.profilePicture ?? null,
+
+        avatarId:
+          user.avatarId ?? null,
+
+        status:
+          'CONNECTED',
+
+        ready:
+          false,
+
+        joinedAt:
+          now,
+
+        lastSeenAt:
+          now,
+
+        score:
+          0,
+
+        correctAnswers:
+          0,
+
+        incorrectAnswers:
+          0,
+
+        answeredQuestions:
+          0,
+
+        rank:
+          playerCount + 1,
+
+        hasAnsweredCurrentQuestion:
+          false,
+
+        answeredQuestionIds:
+          new Set<string>(),
+      };
+
+      session.users.set(
+        user.userId,
+        newUser,
+      );
+
+      this.rankingService
+        .updateRanking(
+          session,
+        );
 
       await this.saveSessionToRedis(
         session,
@@ -323,111 +420,15 @@ export class QuizBattleService {
           user.userId,
         ),
       );
-    }
-
-    if (
-      session.room.status !==
-      'WAITING'
-    ) {
-      throw new ConflictException(
-        'Game has already started',
+      return;
+    } catch (error) {
+      this.logger.error(
+        `Error joining room | roomId=${roomId} | userId=${user.userId}`,
+        error instanceof Error
+          ? error.stack
+          : String(error),
       );
     }
-
-    const playerCount =
-      this.getActivePlayerCount(
-        session,
-      );
-
-    if (
-      playerCount >=
-      session.room.maxPlayers
-    ) {
-      throw new ConflictException(
-        'Room is full',
-      );
-    }
-
-    const now =
-      Date.now();
-
-    const newUser:
-      RoomSessionUser = {
-      userId:
-        user.userId,
-
-      username:
-        user.username,
-
-      profilePicture:
-        user.profilePicture ?? null,
-
-      avatarId:
-        user.avatarId ?? null,
-
-      status:
-        'CONNECTED',
-
-      ready:
-        false,
-
-      joinedAt:
-        now,
-
-      lastSeenAt:
-        now,
-
-      score:
-        0,
-
-      correctAnswers:
-        0,
-
-      incorrectAnswers:
-        0,
-
-      answeredQuestions:
-        0,
-
-      rank:
-        playerCount + 1,
-
-      hasAnsweredCurrentQuestion:
-        false,
-
-      answeredQuestionIds:
-        new Set<string>(),
-    };
-
-    session.users.set(
-      user.userId,
-      newUser,
-    );
-
-    this.rankingService
-      .updateRanking(
-        session,
-      );
-
-    await this.saveSessionToRedis(
-      session,
-    );
-
-    return {
-      reconnected:
-        false,
-
-      state:
-        this.createRoomState(
-          session,
-          user.userId,
-        ),
-
-      joinedUser:
-        this.serializePublicUser(
-          newUser,
-        ),
-    };
   }
 
   // ============================================================
@@ -435,9 +436,8 @@ export class QuizBattleService {
   // ============================================================
 
   async setPlayerReady(
-    roomId: string,
-    userId: string,
-    ready: boolean,
+    { roomId, userId, ready }: { roomId: string; userId: string; ready: boolean },
+    socketCallbackWithRoomState: (state: BattleState) => void
   ) {
     const session =
       await this.getRoom(
@@ -483,10 +483,13 @@ export class QuizBattleService {
       session,
     );
 
-    return this.createRoomState(
-      session,
-      userId,
+    socketCallbackWithRoomState(
+      this.createRoomState(
+        session,
+        userId,
+      ),
     );
+    return;
   }
 
   // ============================================================
@@ -494,99 +497,105 @@ export class QuizBattleService {
   // ============================================================
 
   async startMatch(
-    roomId: string,
-    userId: string,
+    { roomId, userId }: { roomId: string; userId: string },
+    socketCallbackWithRoomState: (state: BattleState) => void
   ) {
-    const session =
-      await this.getRoom(
-        roomId,
-      );
-
-    if (
-      session.room.hostId !==
-      userId
-    ) {
-      throw new ConflictException(
-        'Only the host can start the match',
-      );
-    }
-
-    if (
-      session.room.status !==
-      'WAITING'
-    ) {
-      throw new ConflictException(
-        'Match cannot be started now',
-      );
-    }
-
-    if (
-      !this.canStartMatch(
-        session,
-      )
-    ) {
-      throw new ConflictException(
-        'All players must be ready',
-      );
-    }
-
-    const questions =
-      await this.questionService
-        .loadQuestions(
-          session,
+    try {
+      const session =
+        await this.getRoom(
+          roomId,
         );
 
-    if (
-      !questions.length
-    ) {
-      throw new ConflictException(
-        'No questions available',
+      if (
+        session.room.hostId !==
+        userId
+      ) {
+        throw new ConflictException(
+          'Only the host can start the match',
+        );
+      }
+
+      if (
+        session.room.status !==
+        'WAITING'
+      ) {
+        throw new ConflictException(
+          'Match cannot be started now',
+        );
+      }
+
+      if (
+        !this.canStartMatch(
+          session,
+        )
+      ) {
+        throw new ConflictException(
+          'All players must be ready',
+        );
+      }
+
+      const questions =
+        await this.questionService
+          .loadQuestions(
+            session,
+          );
+
+      if (
+        !questions.length
+      ) {
+        throw new ConflictException(
+          'No questions available',
+        );
+      }
+
+      session.questions =
+        questions;
+
+      session.room.status =
+        'COUNTDOWN';
+
+      session.room.currentQuestionIndex =
+        -1;
+
+      session.room.matchStartedAt =
+        Date.now();
+
+      session.room.currentQuestionId =
+        undefined;
+
+      session.room.questionStartedAt =
+        undefined;
+
+      session.room.questionEndsAt =
+        undefined;
+
+      for (
+        const player of
+        session.users.values()
+      ) {
+        player.hasAnsweredCurrentQuestion =
+          false;
+      }
+
+      await this.saveSessionToRedis(
+        session,
       );
-    }
 
-    session.questions =
-      questions;
-
-    session.room.status =
-      'COUNTDOWN';
-
-    session.room.currentQuestionIndex =
-      -1;
-
-    session.room.matchStartedAt =
-      Date.now();
-
-    session.room.currentQuestionId =
-      undefined;
-
-    session.room.questionStartedAt =
-      undefined;
-
-    session.room.questionEndsAt =
-      undefined;
-
-    for (
-      const player of
-      session.users.values()
-    ) {
-      player.hasAnsweredCurrentQuestion =
-        false;
-    }
-
-    await this.saveSessionToRedis(
-      session,
-    );
-
-    return {
-      countdownSeconds:
-        this.countdownSeconds,
-
-      state:
+      socketCallbackWithRoomState(
         this.createRoomState(
           session,
           userId,
         ),
-    };
+      );
+      return;
+    } catch (error) {
+      this.logger.error(
+        `Error starting match | roomId=${roomId} | userId=${userId}`,
+        error instanceof Error
+          ? error.stack
+          : String(error),
+      );
+    }
   }
 
   // ============================================================
@@ -692,8 +701,8 @@ export class QuizBattleService {
   ) {
     const question =
       session.questions[
-        session.room
-          .currentQuestionIndex
+      session.room
+        .currentQuestionIndex
       ];
 
     if (!question) {
@@ -714,7 +723,7 @@ export class QuizBattleService {
     session.room.questionEndsAt =
       Date.now() +
       question.timeLimitSeconds *
-        1000;
+      1000;
 
     for (
       const player of
@@ -802,7 +811,7 @@ export class QuizBattleService {
     if (
       session.room.questionEndsAt &&
       Date.now() >=
-        session.room.questionEndsAt
+      session.room.questionEndsAt
     ) {
       throw new ConflictException(
         'Time is over',
@@ -837,7 +846,7 @@ export class QuizBattleService {
       ) ||
       answerIndex < 0 ||
       answerIndex >=
-        question.options.length
+      question.options.length
     ) {
       throw new ConflictException(
         'Invalid answer',
@@ -1071,8 +1080,8 @@ export class QuizBattleService {
 
     const next =
       session.questions[
-        session.room
-          .currentQuestionIndex
+      session.room
+        .currentQuestionIndex
       ];
 
     if (!next) {
@@ -1252,7 +1261,7 @@ export class QuizBattleService {
 
     if (
       Date.now() -
-        disconnectedAt <
+      disconnectedAt <
       this.reconnectGracePeriod
     ) {
       return;
@@ -1302,7 +1311,7 @@ export class QuizBattleService {
       session.room.hostId ===
       userId &&
       session.room.status ===
-        'WAITING'
+      'WAITING'
     ) {
       session.room.status =
         'CANCELLED';
@@ -1336,30 +1345,30 @@ export class QuizBattleService {
   createRoomState(
     session: RoomSession,
     userId?: string,
-  ): BattleState{
+  ): BattleState {
     const currentQuestion =
       session.questions[
-        session.room.currentQuestionIndex
+      session.room.currentQuestionIndex
       ] ?? null;
 
     const currentUser =
       userId
         ? session.users.get(
-            userId,
-          )
+          userId,
+        )
         : undefined;
 
     const timerSeconds =
       session.room.questionEndsAt
         ? Math.max(
-            0,
-            Math.ceil(
-              (
-                session.room.questionEndsAt -
-                Date.now()
-              ) / 1000,
-            ),
-          )
+          0,
+          Math.ceil(
+            (
+              session.room.questionEndsAt -
+              Date.now()
+            ) / 1000,
+          ),
+        )
         : 0;
 
     const players =
@@ -1368,12 +1377,12 @@ export class QuizBattleService {
     return {
       phase:
         session.room.status ===
-        'WAITING'
+          'WAITING'
           ? 'LOBBY'
           : session.room.status ===
             'FINISHED'
-          ? 'FINISHED'
-          : 'QUESTION',
+            ? 'FINISHED'
+            : 'QUESTION',
 
       room:
         session.room,
@@ -1385,37 +1394,37 @@ export class QuizBattleService {
           session,
         ),
 
-        currentQuestion,
+      currentQuestion,
 
-        questionIndex:
-          session.room.currentQuestionIndex,
+      questionIndex:
+        session.room.currentQuestionIndex,
 
-        totalQuestions:
-          session.questions.length,
+      totalQuestions:
+        session.questions.length,
 
-        timerSeconds,
+      timerSeconds,
 
-        selectedOptionId:
-          null,
+      selectedOptionId:
+        null,
 
-        hasAnsweredCurrent:
-          currentUser?.hasAnsweredCurrentQuestion ??
-          false,
+      hasAnsweredCurrent:
+        currentUser?.hasAnsweredCurrentQuestion ??
+        false,
 
-        lastAnswerCorrect:
-          null,
+      lastAnswerCorrect:
+        null,
 
-        lastPointsEarned:
-          0,
+      lastPointsEarned:
+        0,
 
-        rankings:
-          session.ranking.rankings,
+      rankings:
+        session.ranking.rankings,
 
-        errorEvent:
-          null,
+      errorEvent:
+        null,
 
-        errorMessage:
-          null,
+      errorMessage:
+        null,
     }
   }
 
@@ -1703,7 +1712,7 @@ export class QuizBattleService {
               new Set(
                 user
                   .answeredQuestionIds ??
-                  [],
+                [],
               ),
           },
         );
@@ -1753,10 +1762,10 @@ export class QuizBattleService {
     ) {
       code +=
         characters[
-          Math.floor(
-            Math.random() *
-              characters.length,
-          )
+        Math.floor(
+          Math.random() *
+          characters.length,
+        )
         ];
     }
 

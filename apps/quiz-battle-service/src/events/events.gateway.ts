@@ -126,7 +126,6 @@ export class EventsGateway {
     );
   }
 
-
   @SubscribeMessage('battle:join')
   handleJoinRoom(
     @ConnectedSocket()
@@ -158,17 +157,6 @@ export class EventsGateway {
       const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map(p => p.userId));
       this.server.to(socketIds).emit('battle:lobby', state);
     }));
-    setTimeout(() => {
-      this.quizBattleService.joinRoom(data.roomId, {
-        userId: user?.id as string,
-        username: user?.username as string,
-        profilePicture: user?.profilePicture as string | null,
-        avatarId: user?.avatarId as string | null,
-      }, (async (state) => {
-        const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map(p => p.userId));
-        this.server.to(socketIds).emit('battle:lobby', state);
-      }));
-    }, 1000)
   }
 
   @SubscribeMessage('battle:create')
@@ -221,7 +209,61 @@ export class EventsGateway {
     }, 1000)
   }
 
-  send() {
-    this.server.emit('message', 'Hello World! Events service is working!');
+  @SubscribeMessage('battle:ready')
+  handleReady(
+    @ConnectedSocket()
+    client: Socket,
+
+    @MessageBody()
+    data: {
+      ready: boolean;
+      roomId: string;
+    }
+  ) {
+
+    const user = this.eventsService.extractUserFromSocket(client);
+
+    if (!user) {
+      this.logger.warn(`Invalid user information for client: ${client.id}`);
+      return;
+    }
+
+    this.quizBattleService.setPlayerReady({
+      roomId: data.roomId,
+      userId: user.id as string,
+      ready: data.ready,
+    }, async (state) => {
+      // console.log("Sending updated room state to client:", data, state);
+      const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map(p => p.userId));
+      this.server.to(socketIds).emit('battle:lobby-updated', state);
+    })
+  }
+
+  @SubscribeMessage('battle:game-start')
+  handleStart(
+    @ConnectedSocket()
+    client: Socket,
+
+    @MessageBody()
+    data: {
+      roomId: string;
+    }
+  ) {
+
+    const user = this.eventsService.extractUserFromSocket(client);
+
+    if (!user) {
+      this.logger.warn(`Invalid user information for client: ${client.id}`);
+      return;
+    }
+
+    this.quizBattleService.startMatch({
+      roomId: data.roomId,
+      userId: user.id as string,
+    }, async (state) => {
+      // console.log("Sending updated room state to client:", data, state);
+      const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map(p => p.userId));
+      this.server.to(socketIds).emit('battle:question', state);
+    })
   }
 }
