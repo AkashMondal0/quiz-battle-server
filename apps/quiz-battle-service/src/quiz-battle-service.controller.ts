@@ -32,28 +32,28 @@ export class QuizBattleServiceController {
   // GET ROOM
   // ============================================================
 
-  @Get(
-    'rooms/:roomId',
-  )
-  async getRoom(
-    @Param('roomId')
-    roomId: string,
-  ) {
-    console.log(
-      'QuizBattleServiceController.getRoom',
-      roomId,
-    );
-    const session =
-      await this.quizBattleService
-        .getRoom(
-          roomId,
-        );
+  // @Get(
+  //   'rooms/:roomId',
+  // )
+  // async getRoom(
+  //   @Param('roomId')
+  //   roomId: string,
+  // ) {
+  //   console.log(
+  //     'QuizBattleServiceController.getRoom',
+  //     roomId,
+  //   );
+  //   const session =
+  //     await this.quizBattleService
+  //       .getRoom(
+  //         roomId,
+  //       );
 
-    return this.quizBattleService
-      .createRoomState(
-        session,
-      );
-  }
+  //   return this.quizBattleService
+  //     .createRoomState(
+  //       session,
+  //     );
+  // }
 
   // ============================================================
   // CREATE ROOM

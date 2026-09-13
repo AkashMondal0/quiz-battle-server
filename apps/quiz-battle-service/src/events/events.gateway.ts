@@ -226,8 +226,11 @@ export class EventsGateway {
       profilePicture: user?.profilePicture as string | null,
       avatarId: user?.avatarId as string | null,
     }, (async (state) => {
-      const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map(p => p.userId));
+      const socketIds = (await this.eventsService.findSocketIdsByUserIds(state.players.map(p => p.userId))).filter(id => id !== user.id);
+      // send a message to all players in the room with the updated state
       this.server.to(socketIds).emit('battle:lobby', state);
+      // join user to the room
+      client.emit('battle:joined-response', state);
     }), (errorMessage) => {
       this.handleError(errorMessage, client);
     });
@@ -289,7 +292,7 @@ export class EventsGateway {
       userId: user.id as string,
     }, async (state) => {
       const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map(p => p.userId));
-      this.server.to(socketIds).emit('battle:question', state);
+      this.server.to(socketIds).emit('battle:game-start', state);
     }, (errorMessage) => {
       this.handleError(errorMessage, client);
     });
