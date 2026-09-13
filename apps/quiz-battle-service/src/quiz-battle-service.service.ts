@@ -66,6 +66,7 @@ export class QuizBattleService {
     socketCallbackWithRoomState: (
       state: unknown,
     ) => void,
+    onError?: (message: string) => void,
   ) {
     try {
       const host =
@@ -223,6 +224,7 @@ export class QuizBattleService {
           ? error.stack
           : String(error),
       );
+      onError?.('An error occurred while creating the room');
     }
   }
 
@@ -285,6 +287,7 @@ export class QuizBattleService {
     socketCallbackWithRoomState: (
       state: BattleState,
     ) => void,
+    onError?: (message: string) => void
   ) {
     try {
       const session =
@@ -300,9 +303,8 @@ export class QuizBattleService {
           existing.status ===
           'LEFT'
         ) {
-          throw new ConflictException(
-            'You have left this match',
-          );
+          onError?.('You have left this match');
+          return;
         }
 
         existing.status =
@@ -330,9 +332,8 @@ export class QuizBattleService {
         session.room.status !==
         'WAITING'
       ) {
-        throw new ConflictException(
-          'Game has already started',
-        );
+        onError?.('Game has already started');
+        return;
       }
 
       const playerCount =
@@ -344,9 +345,8 @@ export class QuizBattleService {
         playerCount >=
         session.room.maxPlayers
       ) {
-        throw new ConflictException(
-          'Room is full',
-        );
+        onError?.('Room is full');
+        return;
       }
 
       const now =
@@ -422,12 +422,13 @@ export class QuizBattleService {
       );
       return;
     } catch (error) {
-      this.logger.error(
-        `Error joining room | roomId=${roomId} | userId=${user.userId}`,
+          this.logger.error(
+        'Error joining room',
         error instanceof Error
           ? error.stack
           : String(error),
       );
+      onError?.('An error occurred while joining the room');
     }
   }
 
@@ -437,7 +438,8 @@ export class QuizBattleService {
 
   async setPlayerReady(
     { roomId, userId, ready }: { roomId: string; userId: string; ready: boolean },
-    socketCallbackWithRoomState: (state: BattleState) => void
+    socketCallbackWithRoomState: (state: BattleState) => void,
+    onError?: (message: string) => void
   ) {
     const session =
       await this.getRoom(
@@ -448,9 +450,7 @@ export class QuizBattleService {
       session.room.status !==
       'WAITING'
     ) {
-      throw new ConflictException(
-        'Ready state cannot be changed now',
-      );
+      onError?.('Ready state cannot be changed now');
     }
 
     const user =
@@ -459,18 +459,16 @@ export class QuizBattleService {
       );
 
     if (!user) {
-      throw new NotFoundException(
-        'Player not found',
-      );
+      onError?.('Player not found');
+      return;
     }
 
     if (
       user.status ===
       'LEFT'
     ) {
-      throw new ConflictException(
-        'Player has left the room',
-      );
+      onError?.('Player has left the room');
+      return;
     }
 
     user.ready =
@@ -498,7 +496,8 @@ export class QuizBattleService {
 
   async startMatch(
     { roomId, userId }: { roomId: string; userId: string },
-    socketCallbackWithRoomState: (state: BattleState) => void
+    socketCallbackWithRoomState: (state: BattleState) => void,
+    onError?: (message: string) => void
   ) {
     try {
       const session =
@@ -510,18 +509,16 @@ export class QuizBattleService {
         session.room.hostId !==
         userId
       ) {
-        throw new ConflictException(
-          'Only the host can start the match',
-        );
+        this.logger.warn('Only the host can start the match');
+        onError?.('Only the host can start the match');
       }
 
       if (
         session.room.status !==
         'WAITING'
       ) {
-        throw new ConflictException(
-          'Match cannot be started now',
-        );
+        this.logger.warn('Match cannot be started now');
+        onError?.('Match cannot be started now');
       }
 
       if (
@@ -529,9 +526,8 @@ export class QuizBattleService {
           session,
         )
       ) {
-        throw new ConflictException(
-          'All players must be ready',
-        );
+        this.logger.warn('All players must be ready');
+        // onError?.('All players must be ready'); TODO: Decide if this should be an error or not
       }
 
       const questions =
@@ -543,9 +539,8 @@ export class QuizBattleService {
       if (
         !questions.length
       ) {
-        throw new ConflictException(
-          'No questions available',
-        );
+        this.logger.warn('No questions available');
+        onError?.('No questions available');
       }
 
       session.questions =
@@ -589,12 +584,13 @@ export class QuizBattleService {
       );
       return;
     } catch (error) {
-      this.logger.error(
-        `Error starting match | roomId=${roomId} | userId=${userId}`,
+          this.logger.error(
+        'Error starting room',
         error instanceof Error
           ? error.stack
           : String(error),
       );
+      onError?.('Failed to start match');
     }
   }
 

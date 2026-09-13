@@ -126,37 +126,23 @@ export class EventsGateway {
     );
   }
 
-  @SubscribeMessage('battle:join')
-  handleJoinRoom(
-    @ConnectedSocket()
+  async handleError(
+    message: string,
     client: Socket,
-    @MessageBody()
-    data: {
-      roomId: string;
-    },
-  ) {
+  ): Promise<void> {
+    this.server.to(client.id).emit('battle:error', {
+      success: false,
+      message: message,
+    });
+  }
 
-    const user = this.eventsService.extractUserFromSocket(
-      client,
-    );
-
-    if (!user) {
-      this.logger.warn(
-        `Invalid user information for client: ${client.id}`,
-      );
-
-      return;
-    }
-
-    this.quizBattleService.joinRoom(data.roomId, {
-      userId: user?.id as string,
-      username: user?.username as string,
-      profilePicture: user?.profilePicture as string | null,
-      avatarId: user?.avatarId as string | null,
-    }, (async (state) => {
-      const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map(p => p.userId));
-      this.server.to(socketIds).emit('battle:lobby', state);
-    }));
+  @SubscribeMessage('test:error')
+  async sendErrorAll(
+  ): Promise<void> {
+    this.server.emit('battle:error', {
+      success: false,
+      message: 'An error occurred while processing the request',
+    });
   }
 
   @SubscribeMessage('battle:create')
@@ -182,6 +168,7 @@ export class EventsGateway {
 
     if (!user) {
       this.logger.warn(`Invalid user information for client: ${client.id}`);
+      this.handleError(`An error occurred while creating the room`, client);
       return;
     }
 
@@ -205,8 +192,45 @@ export class EventsGateway {
       }, (state) => {
         // console.log("Sending room state to client:", state);
         this.server.to(client.id).emit('battle:lobby', state);
+      }, (errorMessage) => {
+        this.handleError(errorMessage, client);
       })
     }, 1000)
+  }
+
+  @SubscribeMessage('battle:join')
+  handleJoinRoom(
+    @ConnectedSocket()
+    client: Socket,
+    @MessageBody()
+    data: {
+      roomId: string;
+    },
+  ) {
+
+    const user = this.eventsService.extractUserFromSocket(
+      client,
+    );
+
+    if (!user) {
+      this.logger.warn(
+        `Invalid user information for client: ${client.id}`,
+      );
+      this.handleError("An error occurred while joining the room", client);
+      return;
+    }
+
+    this.quizBattleService.joinRoom(data.roomId, {
+      userId: user?.id as string,
+      username: user?.username as string,
+      profilePicture: user?.profilePicture as string | null,
+      avatarId: user?.avatarId as string | null,
+    }, (async (state) => {
+      const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map(p => p.userId));
+      this.server.to(socketIds).emit('battle:lobby', state);
+    }), (errorMessage) => {
+      this.handleError(errorMessage, client);
+    });
   }
 
   @SubscribeMessage('battle:ready')
@@ -225,6 +249,7 @@ export class EventsGateway {
 
     if (!user) {
       this.logger.warn(`Invalid user information for client: ${client.id}`);
+      this.handleError(`An error occurred while setting ready status`, client);
       return;
     }
 
@@ -233,9 +258,10 @@ export class EventsGateway {
       userId: user.id as string,
       ready: data.ready,
     }, async (state) => {
-      // console.log("Sending updated room state to client:", data, state);
       const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map(p => p.userId));
       this.server.to(socketIds).emit('battle:lobby-updated', state);
+    }, (errorMessage) => {
+      this.handleError(errorMessage, client);
     })
   }
 
@@ -254,6 +280,7 @@ export class EventsGateway {
 
     if (!user) {
       this.logger.warn(`Invalid user information for client: ${client.id}`);
+      this.handleError(`An error occurred while starting the match`, client);
       return;
     }
 
@@ -261,9 +288,10 @@ export class EventsGateway {
       roomId: data.roomId,
       userId: user.id as string,
     }, async (state) => {
-      // console.log("Sending updated room state to client:", data, state);
       const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map(p => p.userId));
       this.server.to(socketIds).emit('battle:question', state);
-    })
+    }, (errorMessage) => {
+      this.handleError(errorMessage, client);
+    });
   }
 }
