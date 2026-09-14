@@ -10,6 +10,8 @@ export type PlayerStatus =
   | 'DISCONNECTED'
   | 'LEFT';
 
+export type PlayerGameState = "IN_GAME" | "IDLE";
+
 export interface RoomQuestion {
   id: string;
 
@@ -140,9 +142,10 @@ export interface RoomSession {
 export type BattlePhase =
   | 'IDLE'
   | 'LOBBY'
+  | 'COUNTDOWN'
   | 'QUESTION'
-  | 'RESULT'
-  | 'FINISHED';
+  | 'FINISHED'
+  | 'CANCELLED';
 
 export interface BattleState {
   phase: BattlePhase;

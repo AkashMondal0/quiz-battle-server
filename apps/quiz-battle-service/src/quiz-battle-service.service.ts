@@ -1,8 +1,6 @@
 import {
-  ConflictException,
   Injectable,
   Logger,
-  NotFoundException,
 } from '@nestjs/common';
 
 import { RedisService } from '@app/redis';
@@ -20,14 +18,13 @@ import {
 import { QuizBattleQuestionService } from './quiz-battle-question.service';
 
 import { QuizBattleRankingService } from './quiz-battle-ranking.service';
+import { PlayerGameStateService } from './player.game.state.service';
 
 @Injectable()
 export class QuizBattleService {
   private readonly logger = new Logger(QuizBattleService.name);
 
-  /**
-   * Local hot cache.
-   */
+  // Local hot cache.
   private readonly sessions = new Map<string, RoomSession>();
 
   private readonly reconnectGracePeriod = 10 * 60 * 1000;
@@ -40,15 +37,55 @@ export class QuizBattleService {
     private readonly questionService: QuizBattleQuestionService,
 
     private readonly rankingService: QuizBattleRankingService,
-  ) {}
 
-  // ============================================================
+    private readonly playerGameStateService: PlayerGameStateService,
+  ) { }
+
+  async checkReconnectGame(
+    userId: string,
+    socketCallbackWithRoomState: (state: BattleState) => void,
+    onError?: (message: string) => void,
+  ): Promise<void> {
+    // 1. Check whether user belongs to any game
+    const roomId = await this.playerGameStateService.getRoomId(userId);
+
+    if (!roomId) {
+      return;
+    }
+
+    // 2. Get room data
+    const roomData = await this.getRoom(roomId);
+
+    // Room no longer exists
+    if (!roomData) {
+      return;
+    }
+
+    // // 3. Parse current client timestamp
+    // const currentTime = new Date(); // Number(currentAt);
+
+    // if (Number.isNaN(currentTime)) {
+    //   return;
+    // }
+
+    // // 4. Get match start time
+    // const matchStartedAt = new Date(
+    //   Number(roomData?.room?.matchStartedAt),
+    // ).getTime();
+
+    // // 5. Check whether match has already started
+    // if (matchStartedAt <= new Date().getTime()) {
+    // Match already started
+    socketCallbackWithRoomState(this.createRoomState(roomData, userId));
+    return;
+    // }
+  }
+
   // CREATE ROOM
-  // ============================================================
 
   async createRoom(
     body: CreateRoomInput,
-    socketCallbackWithRoomState: (state: unknown) => void,
+    socketCallbackWithRoomState: (state: BattleState) => void,
     onError?: (message: string) => void,
   ) {
     try {
@@ -145,7 +182,7 @@ export class QuizBattleService {
       await this.saveSessionToRedis(session);
 
       const state = this.createRoomState(session, host.userId);
-
+      await this.playerGameStateService.enterGame(host.userId, roomCode);
       socketCallbackWithRoomState(state);
       return;
     } catch (error) {
@@ -157,9 +194,7 @@ export class QuizBattleService {
     }
   }
 
-  // ============================================================
   // GET ROOM
-  // ============================================================
 
   async getRoom(
     roomId: string,
@@ -191,9 +226,7 @@ export class QuizBattleService {
     return restored;
   }
 
-  // ============================================================
   // JOIN
-  // ============================================================
 
   async joinRoom(
     roomId: string,
@@ -286,6 +319,7 @@ export class QuizBattleService {
       await this.saveSessionToRedis(session);
 
       socketCallbackWithRoomState(this.createRoomState(session, user.userId));
+      this.playerGameStateService.enterGame(user.userId, roomId);
       return;
     } catch (error) {
       this.logger.error(
@@ -296,9 +330,29 @@ export class QuizBattleService {
     }
   }
 
-  // ============================================================
+  // RECONNECT
+  async reconnectGame(
+    userId: string,
+    socketCallbackWithRoomState: (state: BattleState) => void,
+  ) {
+const roomId = await this.playerGameStateService.getRoomId(userId);
+
+    if (!roomId) {
+      return;
+    }
+
+    // 2. Get room data
+    const roomData = await this.getRoom(roomId);
+
+    // Room no longer exists
+    if (!roomData) {
+      return;
+    }
+
+    socketCallbackWithRoomState(this.createRoomState(roomData, userId));
+  }
+
   // READY / UNREADY
-  // ============================================================
 
   async setPlayerReady(
     {
@@ -341,9 +395,7 @@ export class QuizBattleService {
     return;
   }
 
-  // ============================================================
   // START MATCH
-  // ============================================================
 
   async startMatch(
     { roomId, userId }: { roomId: string; userId: string },
@@ -411,9 +463,7 @@ export class QuizBattleService {
     }
   }
 
-  // ============================================================
   // COUNTDOWN
-  // ============================================================
 
   async runCountdown(
     roomId: string,
@@ -468,9 +518,7 @@ export class QuizBattleService {
     await this.startCurrentQuestion(latest, emit);
   }
 
-  // ============================================================
   // CURRENT QUESTION
-  // ============================================================
 
   private async startCurrentQuestion(
     session: RoomSession,
@@ -503,9 +551,7 @@ export class QuizBattleService {
     this.scheduleQuestionTimeout(session, question, emit);
   }
 
-  // ============================================================
   // ANSWER
-  // ============================================================
 
   async submitAnswer(
     roomId: string,
@@ -635,9 +681,7 @@ export class QuizBattleService {
     };
   }
 
-  // ============================================================
   // TIMEOUT
-  // ============================================================
 
   private scheduleQuestionTimeout(
     session: RoomSession,
@@ -718,9 +762,7 @@ export class QuizBattleService {
     }
   }
 
-  // ============================================================
   // NEXT QUESTION
-  // ============================================================
 
   private async nextQuestion(
     session: RoomSession,
@@ -751,9 +793,7 @@ export class QuizBattleService {
     await this.startCurrentQuestion(session, emit);
   }
 
-  // ============================================================
   // FINISH
-  // ============================================================
 
   private async finishMatch(
     session: RoomSession,
@@ -788,9 +828,7 @@ export class QuizBattleService {
     });
   }
 
-  // ============================================================
   // DISCONNECT
-  // ============================================================
 
   async disconnectUser(
     roomId: string,
@@ -826,9 +864,7 @@ export class QuizBattleService {
     return this.serializePublicUser(user);
   }
 
-  // ============================================================
   // REMOVE EXPIRED PLAYER
-  // ============================================================
 
   private async removeExpiredPlayer(roomId: string, userId: string) {
     const session = this.sessions.get(roomId);
@@ -862,13 +898,11 @@ export class QuizBattleService {
     await this.saveSessionToRedis(session);
   }
 
-  // ============================================================
   // LEAVE
-  // ============================================================
 
   async leaveRoom(
-    roomId: string,
-    userId: string,
+    { roomId, userId }: { roomId: string; userId: string },
+    socketCallbackWithRoomState: (state: BattleState) => void,
     onError?: (message: string) => void,
   ) {
     const session = await this.getRoom(roomId);
@@ -882,7 +916,9 @@ export class QuizBattleService {
     const user = session.users.get(userId);
 
     if (!user) {
-      throw new NotFoundException('Player not found');
+      onError?.('Player not found');
+      this.logger.warn(`Player not found | room=${roomId} | user=${userId}`);
+      return null;
     }
 
     if (session.room.hostId === userId && session.room.status === 'WAITING') {
@@ -897,12 +933,12 @@ export class QuizBattleService {
 
     await this.saveSessionToRedis(session);
 
-    return this.createRoomState(session, userId);
+    socketCallbackWithRoomState(this.createRoomState(session, userId));
+    this.playerGameStateService.leaveGame(userId);
+    return;
   }
 
-  // ============================================================
   // STATE
-  // ============================================================
 
   createRoomState(session: RoomSession, userId?: string): BattleState {
     const currentQuestion =
@@ -912,9 +948,9 @@ export class QuizBattleService {
 
     const timerSeconds = session.room.questionEndsAt
       ? Math.max(
-          0,
-          Math.ceil((session.room.questionEndsAt - Date.now()) / 1000),
-        )
+        0,
+        Math.ceil((session.room.questionEndsAt - Date.now()) / 1000),
+      )
       : 0;
 
     const players = [...session.users.values()];
@@ -957,9 +993,7 @@ export class QuizBattleService {
     };
   }
 
-  // ============================================================
   // HELPERS
-  // ============================================================
 
   private canStartMatch(session: RoomSession): boolean {
     const players = [...session.users.values()].filter(
@@ -1078,9 +1112,7 @@ export class QuizBattleService {
     };
   }
 
-  // ============================================================
   // REDIS
-  // ============================================================
 
   private async saveSessionToRedis(session: RoomSession) {
     const data = {
@@ -1145,13 +1177,7 @@ export class QuizBattleService {
     }
   }
 
-  // ============================================================
   // IDS
-  // ============================================================
-
-  private generateRoomId(): string {
-    return crypto.randomUUID();
-  }
 
   private generateRoomCode(): string {
     const characters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';

@@ -278,21 +278,4 @@ export class EventsService {
     );
   }
 
-  /**
-   * Broadcast to everybody.
-   */
-  broadcast(
-    event: string,
-    data: unknown,
-  ): void {
-    if (!this.server) {
-      this.logger.warn(
-        'Socket.IO server is not initialized',
-      );
-
-      return;
-    }
-
-    this.server.emit(event, data);
-  }
 }

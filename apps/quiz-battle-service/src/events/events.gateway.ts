@@ -6,20 +6,11 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 
-import {
-  Logger,
-  UsePipes,
-  ValidationPipe,
-} from '@nestjs/common';
+import { Logger, UsePipes, ValidationPipe } from '@nestjs/common';
 
-import {
-  Server,
-  Socket,
-} from 'socket.io';
+import { Server, Socket } from 'socket.io';
 
-import {
-  EventsService,
-} from './events.service';
+import { EventsService } from './events.service';
 import { QuizBattleService } from '../quiz-battle-service.service';
 
 @WebSocketGateway({
@@ -39,48 +30,32 @@ import { QuizBattleService } from '../quiz-battle-service.service';
   }),
 )
 export class EventsGateway {
-  private readonly logger =
-    new Logger(
-      EventsGateway.name,
-    );
+  private readonly logger = new Logger(EventsGateway.name);
 
   @WebSocketServer()
   server!: Server;
 
   constructor(
     private readonly eventsService: EventsService,
-    private readonly quizBattleService: QuizBattleService
-
+    private readonly quizBattleService: QuizBattleService,
   ) { }
 
   afterInit(server: Server): void {
-    this.eventsService.setSocket(
-      server,
-    );
+    this.eventsService.setSocket(server);
 
-    this.logger.log(
-      'Socket.IO server initialized',
-    );
+    this.logger.log('Socket.IO server initialized');
   }
 
-  async handleConnection(
-    client: Socket,
-  ): Promise<void> {
-    this.logger.log(
-      `Client connected: ${client.id}`,
-    );
+  async handleConnection(client: Socket): Promise<void> {
+    this.logger.log(`Client connected: ${client.id}`);
 
     try {
-      const user =
-        this.eventsService.extractUserFromSocket(
-          client,
-        );
+      const user = this.eventsService.extractUserFromSocket(client);
 
       if (!user) {
         client.emit('connection-error', {
           success: false,
-          message:
-            'Invalid user information',
+          message: 'Invalid user information',
         });
 
         client.disconnect(true);
@@ -88,15 +63,17 @@ export class EventsGateway {
         return;
       }
 
-      await this.eventsService.registerSocket(
-        client,
-        user,
-      );
+      await this.eventsService.registerSocket(client, user);
 
       client.emit('connected', {
         success: true,
         socketId: client.id,
         userId: user.id,
+      });
+
+      // reconnect game
+      await this.quizBattleService.checkReconnectGame(user.id, (state) => {
+        client.emit('battle:reconnect-response', state);
       });
 
       this.logger.log(
@@ -105,31 +82,20 @@ export class EventsGateway {
     } catch (error) {
       this.logger.error(
         `Connection failed | ${client.id}`,
-        error instanceof Error
-          ? error.stack
-          : String(error),
+        error instanceof Error ? error.stack : String(error),
       );
 
       client.disconnect(true);
     }
   }
 
-  async handleDisconnect(
-    client: Socket,
-  ): Promise<void> {
-    this.logger.log(
-      `Client disconnected: ${client.id}`,
-    );
+  async handleDisconnect(client: Socket): Promise<void> {
+    this.logger.log(`Client disconnected: ${client.id}`);
 
-    await this.eventsService.unregisterSocket(
-      client,
-    );
+    await this.eventsService.unregisterSocket(client);
   }
 
-  async handleError(
-    message: string,
-    client: Socket,
-  ): Promise<void> {
+  async handleError(message: string, client: Socket): Promise<void> {
     this.server.to(client.id).emit('battle:error', {
       success: false,
       message: message,
@@ -137,8 +103,7 @@ export class EventsGateway {
   }
 
   @SubscribeMessage('test:error')
-  async sendErrorAll(
-  ): Promise<void> {
+  async sendErrorAll(): Promise<void> {
     this.server.emit('battle:error', {
       success: false,
       message: 'An error occurred while processing the request',
@@ -161,9 +126,8 @@ export class EventsGateway {
       questionCount: number;
       secondsPerQuestion: number;
       isPrivate: boolean;
-    }
+    },
   ) {
-
     const user = this.eventsService.extractUserFromSocket(client);
 
     if (!user) {
@@ -173,29 +137,33 @@ export class EventsGateway {
     }
 
     setTimeout(() => {
-      this.quizBattleService.createRoom({
-        aiId: data.aiModelId,
-        mode: data.gameMode,
-        difficulty: data.difficulty,
-        visibility: data.isPrivate ? 'private' : 'public',
-        maxPlayers: data.playerCount,
-        topic: data.topic,
-        prompt: "",
-        host: {
-          userId: user.id as string,
-          username: user.username as string,
-          profilePicture: user.profilePicture as string | null,
-          avatarId: user.avatarId as string | null,
+      this.quizBattleService.createRoom(
+        {
+          aiId: data.aiModelId,
+          mode: data.gameMode,
+          difficulty: data.difficulty,
+          visibility: data.isPrivate ? 'private' : 'public',
+          maxPlayers: data.playerCount,
+          topic: data.topic,
+          prompt: '',
+          host: {
+            userId: user.id as string,
+            username: user.username as string,
+            profilePicture: user.profilePicture as string | null,
+            avatarId: user.avatarId as string | null,
+          },
+          numberOfQuestions: data.questionCount,
+          totalTimeSeconds: data.secondsPerQuestion * data.questionCount,
         },
-        numberOfQuestions: data.questionCount,
-        totalTimeSeconds: data.secondsPerQuestion * data.questionCount,
-      }, (state) => {
-        // console.log("Sending room state to client:", state);
-        this.server.to(client.id).emit('battle:lobby', state);
-      }, (errorMessage) => {
-        this.handleError(errorMessage, client);
-      })
-    }, 1000)
+        (state) => {
+          // console.log("Sending room state to client:", state);
+          this.server.to(client.id).emit('battle:lobby', state);
+        },
+        (errorMessage) => {
+          this.handleError(errorMessage, client);
+        },
+      );
+    }, 1000);
   }
 
   @SubscribeMessage('battle:join')
@@ -207,33 +175,37 @@ export class EventsGateway {
       roomId: string;
     },
   ) {
-
-    const user = this.eventsService.extractUserFromSocket(
-      client,
-    );
+    const user = this.eventsService.extractUserFromSocket(client);
 
     if (!user) {
-      this.logger.warn(
-        `Invalid user information for client: ${client.id}`,
-      );
-      this.handleError("An error occurred while joining the room", client);
+      this.logger.warn(`Invalid user information for client: ${client.id}`);
+      this.handleError('An error occurred while joining the room', client);
       return;
     }
 
-    this.quizBattleService.joinRoom(data.roomId, {
-      userId: user?.id as string,
-      username: user?.username as string,
-      profilePicture: user?.profilePicture as string | null,
-      avatarId: user?.avatarId as string | null,
-    }, (async (state) => {
-      const socketIds = (await this.eventsService.findSocketIdsByUserIds(state.players.map(p => p.userId))).filter(id => id !== user.id);
-      // send a message to all players in the room with the updated state
-      this.server.to(socketIds).emit('battle:lobby', state);
-      // join user to the room
-      client.emit('battle:joined-response', state);
-    }), (errorMessage) => {
-      this.handleError(errorMessage, client);
-    });
+    this.quizBattleService.joinRoom(
+      data.roomId,
+      {
+        userId: user?.id as string,
+        username: user?.username as string,
+        profilePicture: user?.profilePicture as string | null,
+        avatarId: user?.avatarId as string | null,
+      },
+      async (state) => {
+        const socketIds = (
+          await this.eventsService.findSocketIdsByUserIds(
+            state.players.map((p) => p.userId),
+          )
+        ).filter((id) => id !== user.id);
+        // send a message to all players in the room with the updated state
+        this.server.to(socketIds).emit('battle:lobby', state);
+        // join user to the room
+        client.emit('battle:joined-response', state);
+      },
+      (errorMessage) => {
+        this.handleError(errorMessage, client);
+      },
+    );
   }
 
   @SubscribeMessage('battle:ready')
@@ -245,9 +217,8 @@ export class EventsGateway {
     data: {
       ready: boolean;
       roomId: string;
-    }
+    },
   ) {
-
     const user = this.eventsService.extractUserFromSocket(client);
 
     if (!user) {
@@ -256,16 +227,22 @@ export class EventsGateway {
       return;
     }
 
-    this.quizBattleService.setPlayerReady({
-      roomId: data.roomId,
-      userId: user.id as string,
-      ready: data.ready,
-    }, async (state) => {
-      const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map(p => p.userId));
-      this.server.to(socketIds).emit('battle:lobby-updated', state);
-    }, (errorMessage) => {
-      this.handleError(errorMessage, client);
-    })
+    this.quizBattleService.setPlayerReady(
+      {
+        roomId: data.roomId,
+        userId: user.id as string,
+        ready: data.ready,
+      },
+      async (state) => {
+        const socketIds = await this.eventsService.findSocketIdsByUserIds(
+          state.players.map((p) => p.userId),
+        );
+        this.server.to(socketIds).emit('battle:lobby-updated', state);
+      },
+      (errorMessage) => {
+        this.handleError(errorMessage, client);
+      },
+    );
   }
 
   @SubscribeMessage('battle:game-start')
@@ -276,9 +253,8 @@ export class EventsGateway {
     @MessageBody()
     data: {
       roomId: string;
-    }
+    },
   ) {
-
     const user = this.eventsService.extractUserFromSocket(client);
 
     if (!user) {
@@ -287,14 +263,73 @@ export class EventsGateway {
       return;
     }
 
-    this.quizBattleService.startMatch({
-      roomId: data.roomId,
-      userId: user.id as string,
-    }, async (state) => {
-      const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map(p => p.userId));
-      this.server.to(socketIds).emit('battle:game-start', state);
-    }, (errorMessage) => {
-      this.handleError(errorMessage, client);
+    this.quizBattleService.startMatch(
+      {
+        roomId: data.roomId,
+        userId: user.id as string,
+      },
+      async (state) => {
+        const socketIds = await this.eventsService.findSocketIdsByUserIds(
+          state.players.map((p) => p.userId),
+        );
+        this.server.to(socketIds).emit('battle:game-start', state);
+      },
+      (errorMessage) => {
+        this.handleError(errorMessage, client);
+      },
+    );
+  }
+
+  @SubscribeMessage('battle:leave')
+  handleLeave(
+    @ConnectedSocket()
+    client: Socket,
+
+    @MessageBody()
+    data: {
+      roomId: string;
+    },
+  ) {
+    const user = this.eventsService.extractUserFromSocket(client);
+
+    if (!user) {
+      this.logger.warn(`Invalid user information for client: ${client.id}`);
+      this.handleError(`An error occurred while starting the match`, client);
+      return;
+    }
+
+    this.quizBattleService.leaveRoom(
+      {
+        roomId: data.roomId,
+        userId: user.id as string,
+      },
+      async (state) => {
+        const socketIds = await this.eventsService.findSocketIdsByUserIds(
+          state.players.map((p) => p.userId).filter((id) => id !== user.id),
+        );
+        this.server.to(socketIds).emit('battle:player-left', state);
+      },
+      (errorMessage) => {
+        this.handleError(errorMessage, client);
+      },
+    );
+  }
+
+  @SubscribeMessage('battle:reconnect')
+  handleReconnect(
+    @ConnectedSocket()
+    client: Socket,
+  ) {
+    const user = this.eventsService.extractUserFromSocket(client);
+
+    if (!user) {
+      this.logger.warn(`Invalid user information for client: ${client.id}`);
+      this.handleError(`An error occurred while reconnecting`, client);
+      return;
+    }
+
+    this.quizBattleService.reconnectGame(user.id as string, (state) => {
+      client.emit('battle:game-start', state);
     });
   }
 }

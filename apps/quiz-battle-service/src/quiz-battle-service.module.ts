@@ -7,10 +7,19 @@ import { EventsGateway } from './events/events.gateway';
 import { QuizBattleQuestionService } from './quiz-battle-question.service';
 import { QuizBattleRankingService } from './quiz-battle-ranking.service';
 import { EventsService } from './events/events.service';
+import { PlayerGameStateService } from './player.game.state.service';
 
 @Module({
   imports: [ConfigModule],
   controllers: [QuizBattleServiceController],
-  providers: [QuizBattleService, RedisService, EventsGateway, QuizBattleQuestionService, QuizBattleRankingService, EventsService],
+  providers: [
+    QuizBattleService,
+    RedisService,
+    EventsGateway,
+    QuizBattleQuestionService,
+    QuizBattleRankingService,
+    PlayerGameStateService,
+    EventsService
+  ],
 })
-export class QuizBattleServiceModule {}
+export class QuizBattleServiceModule { }
