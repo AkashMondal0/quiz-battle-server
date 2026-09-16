@@ -10,22 +10,37 @@ export type PlayerStatus =
   | 'DISCONNECTED'
   | 'LEFT';
 
-export type PlayerGameState = "IN_GAME" | "IDLE";
-
 export interface RoomQuestion {
-  id: string;
-
-  question: string;
-
-  options: string[];
-  correctAnswerIndex: number;
-
-  category?: string | null;
-
+  id?: string | null;
+  index?: number | null;
+  type?: string | null;
   difficulty?: string | null;
-
-  timeLimitSeconds: number;
+  topic?: string | null;
+  question?: string | null;
+  media?: string | null;
+  options?: QuestionOptionDto[] | null;
+  correctOptionId?: string | null;
+  points?: number | null;
+  timeLimitSeconds?: number | null;
+  status?: string | null;
+  startedAt?: number | null;
+  endsAt?: number | null;
+  explanation?: string | null;
+  stats?: QuestionStatsDto | null;
 }
+
+export interface QuestionOptionDto {
+  id?: string | null;
+  text?: string | null;
+}
+
+export interface QuestionStatsDto {
+  totalAnswered?: number | null;
+  correctCount?: number | null;
+  optionDistribution?: Record<string, number> | null;
+}
+
+
 
 export interface RoomSessionUser {
   userId: string;
@@ -166,6 +181,7 @@ export interface BattleState {
   lastPointsEarned: number;
 
   rankings: RankingUser[];
+  questions: RoomQuestion[];
 
   errorEvent: string | null;
   errorMessage: string | null;

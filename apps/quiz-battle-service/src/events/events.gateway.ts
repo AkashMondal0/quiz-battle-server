@@ -46,6 +46,13 @@ export class EventsGateway {
     this.logger.log('Socket.IO server initialized');
   }
 
+  async handleError(message: string, client: Socket): Promise<void> {
+    this.server.to(client.id).emit('battle:error', {
+      success: false,
+      message: message,
+    });
+  }
+
   async handleConnection(client: Socket): Promise<void> {
     this.logger.log(`Client connected: ${client.id}`);
 
@@ -53,11 +60,7 @@ export class EventsGateway {
       const user = this.eventsService.extractUserFromSocket(client);
 
       if (!user) {
-        client.emit('connection-error', {
-          success: false,
-          message: 'Invalid user information',
-        });
-
+        this.handleError(`Invalid user information for client: ${client.id}`, client);
         client.disconnect(true);
 
         return;
@@ -74,6 +77,9 @@ export class EventsGateway {
       // reconnect game
       await this.quizBattleService.checkReconnectGame(user.id, (state) => {
         client.emit('battle:reconnect-response', state);
+        // console.log(`Reconnected user ${user.username} (${user.id}) to game with state:`, state);
+      }, (errorMessage) => {
+        this.handleError(errorMessage, client);
       });
 
       this.logger.log(
@@ -93,13 +99,6 @@ export class EventsGateway {
     this.logger.log(`Client disconnected: ${client.id}`);
 
     await this.eventsService.unregisterSocket(client);
-  }
-
-  async handleError(message: string, client: Socket): Promise<void> {
-    this.server.to(client.id).emit('battle:error', {
-      success: false,
-      message: message,
-    });
   }
 
   @SubscribeMessage('test:error')

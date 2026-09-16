@@ -50,20 +50,20 @@ export class EventsService {
     );
   }
 
-  /**
-   * Extract user information from handshake.
-   *
-   * Client connects like:
-   *
-   * io("http://localhost:5000/event", {
-   *   transports: ["websocket"],
-   *   query: {
-   *     id: "123",
-   *     username: "akash",
-   *     profilePicture: "..."
-   *   }
-   * })
-   */
+  
+   // Extract user information from handshake.
+   //
+   // Client connects like:
+   //
+   // io("http://localhost:5000/event", {
+   //   transports: ["websocket"],
+   //   query: {
+   //     id: "123",
+   //     username: "akash",
+   //     profilePicture: "..."
+   //   }
+   // })
+   
   extractUserFromSocket(
     client: Socket,
   ): SocketUser | null {

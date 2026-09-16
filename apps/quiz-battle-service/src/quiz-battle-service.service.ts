@@ -172,7 +172,7 @@ export class QuizBattleService {
           updatedAt: now,
         },
 
-        questions: [],
+        questions: await this.questionService.loadQuestions(10),
       };
 
       this.rankingService.updateRanking(session);
@@ -335,7 +335,7 @@ export class QuizBattleService {
     userId: string,
     socketCallbackWithRoomState: (state: BattleState) => void,
   ) {
-const roomId = await this.playerGameStateService.getRoomId(userId);
+    const roomId = await this.playerGameStateService.getRoomId(userId);
 
     if (!roomId) {
       return;
@@ -425,7 +425,7 @@ const roomId = await this.playerGameStateService.getRoomId(userId);
         // onError?.('All players must be ready'); TODO: Decide if this should be an error or not
       }
 
-      const questions = await this.questionService.loadQuestions(session);
+      const questions = await this.questionService.loadQuestions(session.room.numberOfQuestions);
 
       if (!questions.length) {
         this.logger.warn('No questions available');
@@ -462,6 +462,140 @@ const roomId = await this.playerGameStateService.getRoomId(userId);
       onError?.('Failed to start match');
     }
   }
+
+  // DISCONNECT
+
+  async disconnectUser(
+    roomId: string,
+    userId: string,
+    onError?: (message: string) => void,
+  ) {
+    const session = await this.getRoom(roomId);
+
+    if (!session) {
+      onError?.('Failed to get room');
+      this.logger.warn(`Failed to get room | room=${roomId}`);
+      return null;
+    }
+
+    const user = session.users.get(userId);
+
+    if (!user) {
+      return null;
+    }
+
+    user.status = 'DISCONNECTED';
+
+    user.disconnectedAt = Date.now();
+
+    user.lastSeenAt = Date.now();
+
+    await this.saveSessionToRedis(session);
+
+    setTimeout(() => {
+      void this.removeExpiredPlayer(roomId, userId);
+    }, this.reconnectGracePeriod);
+
+    return this.serializePublicUser(user);
+  }
+
+  // LEAVE
+
+  async leaveRoom(
+    { roomId, userId }: { roomId: string; userId: string },
+    socketCallbackWithRoomState: (state: BattleState) => void,
+    onError?: (message: string) => void,
+  ) {
+    const session = await this.getRoom(roomId);
+
+    if (!session) {
+      onError?.('Failed to get room');
+      this.logger.warn(`Failed to get room | room=${roomId}`);
+      return null;
+    }
+
+    const user = session.users.get(userId);
+
+    if (!user) {
+      onError?.('Player not found');
+      this.logger.warn(`Player not found | room=${roomId} | user=${userId}`);
+      return null;
+    }
+
+    if (session.room.hostId === userId && session.room.status === 'WAITING') {
+      session.room.status = 'CANCELLED';
+    }
+
+    user.status = 'LEFT';
+
+    user.ready = false;
+
+    this.rankingService.updateRanking(session);
+
+    await this.saveSessionToRedis(session);
+
+    socketCallbackWithRoomState(this.createRoomState(session, userId));
+    this.playerGameStateService.leaveGame(userId);
+    return;
+  }
+
+  // STATE
+
+  private createRoomState(session: RoomSession, userId?: string): BattleState {
+    const currentQuestion =
+      session.questions[session.room.currentQuestionIndex] ?? null;
+
+    const currentUser = userId ? session.users.get(userId) : undefined;
+
+    const timerSeconds = session.room.questionEndsAt
+      ? Math.max(
+        0,
+        Math.ceil((session.room.questionEndsAt - Date.now()) / 1000),
+      )
+      : 0;
+
+    const players = [...session.users.values()];
+
+    return {
+      phase:
+        session.room.status === 'WAITING'
+          ? 'LOBBY'
+          : session.room.status === 'FINISHED'
+            ? 'FINISHED'
+            : 'QUESTION',
+
+      room: session.room,
+
+      players,
+
+      allReady: this.areAllPlayersReady(session),
+
+      currentQuestion,
+
+      questionIndex: session.room.currentQuestionIndex,
+
+      totalQuestions: session.questions.length,
+
+      timerSeconds,
+
+      selectedOptionId: null,
+
+      hasAnsweredCurrent: currentUser?.hasAnsweredCurrentQuestion ?? false,
+
+      lastAnswerCorrect: null,
+
+      lastPointsEarned: 0,
+
+      rankings: session.ranking.rankings,
+      questions: session.questions ,
+
+      errorEvent: null,
+
+      errorMessage: null,
+    };
+  }
+
+  // upcoming methods
 
   // COUNTDOWN
 
@@ -524,162 +658,162 @@ const roomId = await this.playerGameStateService.getRoomId(userId);
     session: RoomSession,
     emit: (event: string, data: unknown) => void,
   ) {
-    const question = session.questions[session.room.currentQuestionIndex];
+    // const question = session.questions[session.room.currentQuestionIndex];
 
-    if (!question) {
-      await this.finishMatch(session, emit);
+    // if (!question) {
+    //   await this.finishMatch(session, emit);
 
-      return;
-    }
+    //   return;
+    // }
 
-    session.room.currentQuestionId = question.id;
+    // session.room.currentQuestionId = question.id;
 
-    session.room.questionStartedAt = Date.now();
+    // session.room.questionStartedAt = Date.now();
 
-    session.room.questionEndsAt = Date.now() + question.timeLimitSeconds * 1000;
+    // session.room.questionEndsAt = Date.now() + question.timeLimitSeconds * 1000;
 
-    for (const player of session.users.values()) {
-      player.hasAnsweredCurrentQuestion = false;
-    }
+    // for (const player of session.users.values()) {
+    //   player.hasAnsweredCurrentQuestion = false;
+    // }
 
-    await this.saveSessionToRedis(session);
+    // await this.saveSessionToRedis(session);
 
-    emit('battle:question', {
-      question: this.serializeQuestion(question, session),
-    });
+    // emit('battle:question', {
+    //   question: this.serializeQuestion(question, session),
+    // });
 
-    this.scheduleQuestionTimeout(session, question, emit);
+    // this.scheduleQuestionTimeout(session, question, emit);
   }
 
   // ANSWER
 
-  async submitAnswer(
-    roomId: string,
-    userId: string,
-    questionId: string,
-    answerIndex: number,
-    onError?: (message: string) => void,
-  ) {
-    const session = await this.getRoom(roomId);
+  // async submitAnswer(
+  //   roomId: string,
+  //   userId: string,
+  //   questionId: string,
+  //   answerIndex: number,
+  //   onError?: (message: string) => void,
+  // ) {
+  //   const session = await this.getRoom(roomId);
 
-    if (!session) {
-      onError?.('Failed to get room');
-      return;
-    }
+  //   if (!session) {
+  //     onError?.('Failed to get room');
+  //     return;
+  //   }
 
-    const user = session.users.get(userId);
+  //   const user = session.users.get(userId);
 
-    if (!user) {
-      onError?.('Player not found');
-      this.logger.warn(`Player not found | room=${roomId} | user=${userId}`);
-      return;
-    }
+  //   if (!user) {
+  //     onError?.('Player not found');
+  //     this.logger.warn(`Player not found | room=${roomId} | user=${userId}`);
+  //     return;
+  //   }
 
-    if (user.status === 'LEFT') {
-      onError?.('Player has left the match');
-      this.logger.warn(
-        `Player has left the match | room=${roomId} | user=${userId}`,
-      );
-      return;
-    }
+  //   if (user.status === 'LEFT') {
+  //     onError?.('Player has left the match');
+  //     this.logger.warn(
+  //       `Player has left the match | room=${roomId} | user=${userId}`,
+  //     );
+  //     return;
+  //   }
 
-    if (session.room.status !== 'PLAYING') {
-      onError?.('Game is not currently playing');
-      this.logger.warn(
-        `Game is not currently playing | room=${roomId} | user=${userId}`,
-      );
-      return;
-    }
+  //   if (session.room.status !== 'PLAYING') {
+  //     onError?.('Game is not currently playing');
+  //     this.logger.warn(
+  //       `Game is not currently playing | room=${roomId} | user=${userId}`,
+  //     );
+  //     return;
+  //   }
 
-    if (session.room.currentQuestionId !== questionId) {
-      onError?.('This question is no longer active');
-      this.logger.warn(
-        `This question is no longer active | room=${roomId} | user=${userId} | question=${questionId}`,
-      );
-      return;
-    }
+  //   if (session.room.currentQuestionId !== questionId) {
+  //     onError?.('This question is no longer active');
+  //     this.logger.warn(
+  //       `This question is no longer active | room=${roomId} | user=${userId} | question=${questionId}`,
+  //     );
+  //     return;
+  //   }
 
-    if (
-      session.room.questionEndsAt &&
-      Date.now() >= session.room.questionEndsAt
-    ) {
-      this.logger.warn(
-        `Time is over | room=${roomId} | user=${userId} | question=${questionId}`,
-      );
-      onError?.('Time is over');
-      return;
-    }
+  //   if (
+  //     session.room.questionEndsAt &&
+  //     Date.now() >= session.room.questionEndsAt
+  //   ) {
+  //     this.logger.warn(
+  //       `Time is over | room=${roomId} | user=${userId} | question=${questionId}`,
+  //     );
+  //     onError?.('Time is over');
+  //     return;
+  //   }
 
-    if (user.answeredQuestionIds.has(questionId)) {
-      onError?.('Question already answered');
-      this.logger.warn(
-        `Question already answered | room=${roomId} | user=${userId} | question=${questionId}`,
-      );
-      return;
-    }
+  //   if (user.answeredQuestionIds.has(questionId)) {
+  //     onError?.('Question already answered');
+  //     this.logger.warn(
+  //       `Question already answered | room=${roomId} | user=${userId} | question=${questionId}`,
+  //     );
+  //     return;
+  //   }
 
-    const question = this.questionService.getQuestion(session, questionId);
+  //   const question = this.questionService.getQuestion(session, questionId);
 
-    if (!question) {
-      onError?.('Question not found');
-      this.logger.warn(
-        `Question not found | room=${roomId} | user=${userId} | question=${questionId}`,
-      );
-      return;
-    }
+  //   if (!question) {
+  //     onError?.('Question not found');
+  //     this.logger.warn(
+  //       `Question not found | room=${roomId} | user=${userId} | question=${questionId}`,
+  //     );
+  //     return;
+  //   }
 
-    if (
-      !Number.isInteger(answerIndex) ||
-      answerIndex < 0 ||
-      answerIndex >= question.options.length
-    ) {
-      onError?.('Invalid answer');
-      this.logger.warn(
-        `Invalid answer | room=${roomId} | user=${userId} | question=${questionId} | answer=${answerIndex}`,
-      );
-      return;
-    }
+  //   if (
+  //     !Number.isInteger(answerIndex) ||
+  //     answerIndex < 0 ||
+  //     answerIndex >= question.options.length
+  //   ) {
+  //     onError?.('Invalid answer');
+  //     this.logger.warn(
+  //       `Invalid answer | room=${roomId} | user=${userId} | question=${questionId} | answer=${answerIndex}`,
+  //     );
+  //     return;
+  //   }
 
-    const correct = question.correctAnswerIndex === answerIndex;
+  //   const correct = question.correctAnswerIndex === answerIndex;
 
-    const points = this.calculatePoints(session, question, correct);
+  //   const points = this.calculatePoints(session, question, correct);
 
-    user.answeredQuestionIds.add(questionId);
+  //   user.answeredQuestionIds.add(questionId);
 
-    user.hasAnsweredCurrentQuestion = true;
+  //   user.hasAnsweredCurrentQuestion = true;
 
-    user.answeredQuestions++;
+  //   user.answeredQuestions++;
 
-    if (correct) {
-      user.correctAnswers++;
+  //   if (correct) {
+  //     user.correctAnswers++;
 
-      user.score += points;
-    } else {
-      user.incorrectAnswers++;
-    }
+  //     user.score += points;
+  //   } else {
+  //     user.incorrectAnswers++;
+  //   }
 
-    user.lastSeenAt = Date.now();
+  //   user.lastSeenAt = Date.now();
 
-    this.rankingService.updateRanking(session);
+  //   this.rankingService.updateRanking(session);
 
-    await this.saveSessionToRedis(session);
+  //   await this.saveSessionToRedis(session);
 
-    return {
-      correct,
+  //   return {
+  //     correct,
 
-      points,
+  //     points,
 
-      score: user.score,
+  //     score: user.score,
 
-      rank: user.rank,
+  //     rank: user.rank,
 
-      ranking: session.ranking,
+  //     ranking: session.ranking,
 
-      userId,
+  //     userId,
 
-      questionId,
-    };
-  }
+  //     questionId,
+  //   };
+  // }
 
   // TIMEOUT
 
@@ -700,9 +834,9 @@ const roomId = await this.playerGameStateService.getRoomId(userId);
 
     const delay = Math.max(0, endsAt - Date.now());
 
-    session.timer = setTimeout(() => {
-      void this.handleQuestionTimeout(roomId, questionId, emit);
-    }, delay);
+    // session.timer = setTimeout(() => {
+    //   void this.handleQuestionTimeout(roomId, questionId, emit);
+    // }, delay);
   }
 
   private async handleQuestionTimeout(
@@ -828,42 +962,6 @@ const roomId = await this.playerGameStateService.getRoomId(userId);
     });
   }
 
-  // DISCONNECT
-
-  async disconnectUser(
-    roomId: string,
-    userId: string,
-    onError?: (message: string) => void,
-  ) {
-    const session = await this.getRoom(roomId);
-
-    if (!session) {
-      onError?.('Failed to get room');
-      this.logger.warn(`Failed to get room | room=${roomId}`);
-      return null;
-    }
-
-    const user = session.users.get(userId);
-
-    if (!user) {
-      return null;
-    }
-
-    user.status = 'DISCONNECTED';
-
-    user.disconnectedAt = Date.now();
-
-    user.lastSeenAt = Date.now();
-
-    await this.saveSessionToRedis(session);
-
-    setTimeout(() => {
-      void this.removeExpiredPlayer(roomId, userId);
-    }, this.reconnectGracePeriod);
-
-    return this.serializePublicUser(user);
-  }
-
   // REMOVE EXPIRED PLAYER
 
   private async removeExpiredPlayer(roomId: string, userId: string) {
@@ -896,101 +994,6 @@ const roomId = await this.playerGameStateService.getRoomId(userId);
     this.rankingService.updateRanking(session);
 
     await this.saveSessionToRedis(session);
-  }
-
-  // LEAVE
-
-  async leaveRoom(
-    { roomId, userId }: { roomId: string; userId: string },
-    socketCallbackWithRoomState: (state: BattleState) => void,
-    onError?: (message: string) => void,
-  ) {
-    const session = await this.getRoom(roomId);
-
-    if (!session) {
-      onError?.('Failed to get room');
-      this.logger.warn(`Failed to get room | room=${roomId}`);
-      return null;
-    }
-
-    const user = session.users.get(userId);
-
-    if (!user) {
-      onError?.('Player not found');
-      this.logger.warn(`Player not found | room=${roomId} | user=${userId}`);
-      return null;
-    }
-
-    if (session.room.hostId === userId && session.room.status === 'WAITING') {
-      session.room.status = 'CANCELLED';
-    }
-
-    user.status = 'LEFT';
-
-    user.ready = false;
-
-    this.rankingService.updateRanking(session);
-
-    await this.saveSessionToRedis(session);
-
-    socketCallbackWithRoomState(this.createRoomState(session, userId));
-    this.playerGameStateService.leaveGame(userId);
-    return;
-  }
-
-  // STATE
-
-  createRoomState(session: RoomSession, userId?: string): BattleState {
-    const currentQuestion =
-      session.questions[session.room.currentQuestionIndex] ?? null;
-
-    const currentUser = userId ? session.users.get(userId) : undefined;
-
-    const timerSeconds = session.room.questionEndsAt
-      ? Math.max(
-        0,
-        Math.ceil((session.room.questionEndsAt - Date.now()) / 1000),
-      )
-      : 0;
-
-    const players = [...session.users.values()];
-
-    return {
-      phase:
-        session.room.status === 'WAITING'
-          ? 'LOBBY'
-          : session.room.status === 'FINISHED'
-            ? 'FINISHED'
-            : 'QUESTION',
-
-      room: session.room,
-
-      players,
-
-      allReady: this.areAllPlayersReady(session),
-
-      currentQuestion,
-
-      questionIndex: session.room.currentQuestionIndex,
-
-      totalQuestions: session.questions.length,
-
-      timerSeconds,
-
-      selectedOptionId: null,
-
-      hasAnsweredCurrent: currentUser?.hasAnsweredCurrentQuestion ?? false,
-
-      lastAnswerCorrect: null,
-
-      lastPointsEarned: 0,
-
-      rankings: session.ranking.rankings,
-
-      errorEvent: null,
-
-      errorMessage: null,
-    };
   }
 
   // HELPERS
@@ -1056,25 +1059,25 @@ const roomId = await this.playerGameStateService.getRoomId(userId);
     return base + speedBonus;
   }
 
-  private serializeQuestion(question: RoomQuestion, session: RoomSession) {
-    return {
-      id: question.id,
+  // private serializeQuestion(question: RoomQuestion, session: RoomSession) {
+  //   return {
+  //     id: question.id,
 
-      question: question.question,
+  //     question: question.question,
 
-      options: question.options,
+  //     options: question.options,
 
-      category: question.category,
+  //     category: question.category,
 
-      difficulty: question.difficulty,
+  //     difficulty: question.difficulty,
 
-      timeLimitSeconds: question.timeLimitSeconds,
+  //     timeLimitSeconds: question.timeLimitSeconds,
 
-      startedAt: session.room.questionStartedAt,
+  //     startedAt: session.room.questionStartedAt,
 
-      endsAt: session.room.questionEndsAt,
-    };
-  }
+  //     endsAt: session.room.questionEndsAt,
+  //   };
+  // }
 
   private serializePublicUser(user: RoomSessionUser) {
     return {
