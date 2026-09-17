@@ -1,7 +1,4 @@
-import {
-  Injectable,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
 import { RedisService } from '@app/redis';
 
@@ -192,6 +189,16 @@ export class QuizBattleService {
       );
       onError?.('An error occurred while creating the room');
     }
+  }
+
+  async getRoomData(roomId: string): Promise<BattleState | null> {
+    const session = await this.getRoom(roomId);
+
+    if (!session) {
+      return null;
+    }
+
+    return this.createRoomState(session);
   }
 
   // GET ROOM
@@ -413,23 +420,28 @@ export class QuizBattleService {
       if (session.room.hostId !== userId) {
         this.logger.warn('Only the host can start the match');
         onError?.('Only the host can start the match');
+        return;
       }
 
       if (session.room.status !== 'WAITING') {
         this.logger.warn('Match cannot be started now');
         onError?.('Match cannot be started now');
+        return;
       }
 
-      if (!this.canStartMatch(session)) {
-        this.logger.warn('All players must be ready');
-        // onError?.('All players must be ready'); TODO: Decide if this should be an error or not
-      }
+      // if (!this.canStartMatch(session)) {
+      //   this.logger.warn('All players must be ready');
+      //   onError?.('All players must be ready'); // TODO: Decide if this should be an error or not
+      // }
 
-      const questions = await this.questionService.loadQuestions(session.room.numberOfQuestions);
+      const questions = await this.questionService.loadQuestions(
+        session.room.numberOfQuestions,
+      );
 
       if (!questions.length) {
         this.logger.warn('No questions available');
         onError?.('No questions available');
+        return;
       }
 
       session.questions = questions;
@@ -460,6 +472,7 @@ export class QuizBattleService {
         error instanceof Error ? error.stack : String(error),
       );
       onError?.('Failed to start match');
+      return;
     }
   }
 
@@ -506,37 +519,46 @@ export class QuizBattleService {
     socketCallbackWithRoomState: (state: BattleState) => void,
     onError?: (message: string) => void,
   ) {
-    const session = await this.getRoom(roomId);
+    try {
+      const session = await this.getRoom(roomId);
 
-    if (!session) {
-      onError?.('Failed to get room');
-      this.logger.warn(`Failed to get room | room=${roomId}`);
-      return null;
+      if (!session) {
+        onError?.('Failed to get room');
+        return;
+      }
+
+      const user = session.users.get(userId);
+
+      if (!user) {
+        onError?.('Player not found');
+        return;
+      }
+
+      // Remove player completely from the room
+      session.users.delete(userId);
+
+      // Update ranking after removing player
+      this.rankingService.updateRanking(session);
+
+      // Save updated room state
+      await this.saveSessionToRedis(session);
+
+      // Remove user -> roomId mapping from Redis
+      await this.playerGameStateService.leaveGame(userId);
+
+      // Create updated state without the leaving player
+      const state = this.createRoomState(session);
+
+      // Send updated state
+      socketCallbackWithRoomState(state);
+    } catch (error) {
+      this.logger.error(
+        'Error leaving room',
+        error instanceof Error ? error.stack : String(error),
+      );
+
+      onError?.('An error occurred while leaving the room');
     }
-
-    const user = session.users.get(userId);
-
-    if (!user) {
-      onError?.('Player not found');
-      this.logger.warn(`Player not found | room=${roomId} | user=${userId}`);
-      return null;
-    }
-
-    if (session.room.hostId === userId && session.room.status === 'WAITING') {
-      session.room.status = 'CANCELLED';
-    }
-
-    user.status = 'LEFT';
-
-    user.ready = false;
-
-    this.rankingService.updateRanking(session);
-
-    await this.saveSessionToRedis(session);
-
-    socketCallbackWithRoomState(this.createRoomState(session, userId));
-    this.playerGameStateService.leaveGame(userId);
-    return;
   }
 
   // STATE
@@ -587,7 +609,7 @@ export class QuizBattleService {
       lastPointsEarned: 0,
 
       rankings: session.ranking.rankings,
-      questions: session.questions ,
+      questions: session.questions,
 
       errorEvent: null,
 
@@ -659,29 +681,20 @@ export class QuizBattleService {
     emit: (event: string, data: unknown) => void,
   ) {
     // const question = session.questions[session.room.currentQuestionIndex];
-
     // if (!question) {
     //   await this.finishMatch(session, emit);
-
     //   return;
     // }
-
     // session.room.currentQuestionId = question.id;
-
     // session.room.questionStartedAt = Date.now();
-
     // session.room.questionEndsAt = Date.now() + question.timeLimitSeconds * 1000;
-
     // for (const player of session.users.values()) {
     //   player.hasAnsweredCurrentQuestion = false;
     // }
-
     // await this.saveSessionToRedis(session);
-
     // emit('battle:question', {
     //   question: this.serializeQuestion(question, session),
     // });
-
     // this.scheduleQuestionTimeout(session, question, emit);
   }
 

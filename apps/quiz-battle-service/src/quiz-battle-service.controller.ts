@@ -23,6 +23,6 @@ export class QuizBattleServiceController {
   async getRoomSession(
     @Param('roomCode') roomCode: string,
   ) {
-    return await this.quizBattleService.getRoom(roomCode);
+    return await this.quizBattleService.getRoomData(roomCode);
   }
 }

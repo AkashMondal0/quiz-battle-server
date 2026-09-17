@@ -293,7 +293,10 @@ export class EventsGateway {
 
     if (!user) {
       this.logger.warn(`Invalid user information for client: ${client.id}`);
-      this.handleError(`An error occurred while starting the match`, client);
+      this.handleError(
+        `An error occurred while leaving the match`,
+        client,
+      );
       return;
     }
 
@@ -304,16 +307,20 @@ export class EventsGateway {
       },
       async (state) => {
         const socketIds = await this.eventsService.findSocketIdsByUserIds(
-          state.players.map((p) => p.userId).filter((id) => id !== user.id),
+          state.players.map((player) => player.userId),
         );
-        this.server.to(socketIds).emit('battle:player-left', state);
+
+        // Send updated state to remaining players
+        this.server.to(socketIds).emit(
+          'battle:player-left',
+          state,
+        );
       },
       (errorMessage) => {
         this.handleError(errorMessage, client);
       },
     );
   }
-
   @SubscribeMessage('battle:reconnect')
   handleReconnect(
     @ConnectedSocket()
