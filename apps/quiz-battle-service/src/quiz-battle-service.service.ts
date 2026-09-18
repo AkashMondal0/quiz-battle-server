@@ -36,7 +36,7 @@ export class QuizBattleService {
     private readonly rankingService: QuizBattleRankingService,
 
     private readonly playerGameStateService: PlayerGameStateService,
-  ) { }
+  ) {}
 
   async checkReconnectGame(
     userId: string,
@@ -250,7 +250,7 @@ export class QuizBattleService {
       const session = await this.getRoom(roomId);
 
       if (!session) {
-        onError?.('Failed to get room');
+        onError?.('Room not found');
         return;
       }
 
@@ -372,7 +372,7 @@ export class QuizBattleService {
   ) {
     const session = await this.getRoom(roomId);
     if (!session) {
-      onError?.('Failed to get room');
+      onError?.('Room not found');
       return;
     }
     if (session.room.status !== 'WAITING') {
@@ -413,7 +413,7 @@ export class QuizBattleService {
       const session = await this.getRoom(roomId);
 
       if (!session) {
-        onError?.('Failed to get room');
+        onError?.('Room not found');
         return;
       }
 
@@ -446,7 +446,7 @@ export class QuizBattleService {
 
       session.questions = questions;
 
-      session.room.status = 'COUNTDOWN';
+      session.room.status = "PLAYING";
 
       session.room.currentQuestionIndex = -1;
 
@@ -486,8 +486,8 @@ export class QuizBattleService {
     const session = await this.getRoom(roomId);
 
     if (!session) {
-      onError?.('Failed to get room');
-      this.logger.warn(`Failed to get room | room=${roomId}`);
+      onError?.('Room not found');
+      this.logger.warn(`Room not found | room=${roomId}`);
       return null;
     }
 
@@ -523,7 +523,7 @@ export class QuizBattleService {
       const session = await this.getRoom(roomId);
 
       if (!session) {
-        onError?.('Failed to get room');
+        onError?.('Room not found');
         return;
       }
 
@@ -561,6 +561,134 @@ export class QuizBattleService {
     }
   }
 
+  async answerAttempt(
+    {
+      roomId,
+      userId,
+      qId,
+      oId,
+    }: {
+      roomId: string;
+      userId: string;
+      qId: string;
+      oId: string;
+    },
+    socketCallbackWithRoomState: (state: BattleState) => void,
+    onError?: (message: string) => void,
+  ) {
+    try {
+      // 1. Get room
+      const session = await this.getRoom(roomId);
+
+      if (!session) {
+        onError?.('Room not found');
+        return;
+      }
+
+      // 2. Get player
+      const user = session.users.get(userId);
+
+      if (!user) {
+        onError?.('Player not found');
+        return;
+      }
+
+      // 3. Player must not have left
+      if (user.status === 'LEFT') {
+        onError?.('Player has left the match');
+        return;
+      }
+
+      // 4. Game must be playing
+      if (session.room.status !== 'PLAYING') {
+        onError?.('Game is not currently playing');
+        return;
+      }
+
+      // 5. Verify this is the current question
+      if (session.questions.findIndex((item) => item.id === qId) === -1) {
+        onError?.('This question is no longer active');
+        return;
+      }
+
+      // 6. Check question timeout
+      // if (
+      //   session.room.questionEndsAt &&
+      //   Date.now() >= session.room.questionEndsAt
+      // ) {
+      //   onError?.('Time is over');
+      //   return;
+      // }
+
+      // 7. Prevent duplicate answer
+      if (user.answeredQuestionIds.has(qId)) {
+        onError?.('Question already answered');
+        return;
+      }
+
+      // 8. Find question
+      const question = session.questions.find((item) => item.id === qId);
+
+      if (!question) {
+        onError?.('Question not found');
+        return;
+      }
+
+      // 9. Validate selected option
+      const selectedOption = question.options?.find(
+        (option) => option.id === oId,
+      );
+
+      if (!selectedOption) {
+        onError?.('Invalid answer');
+        return;
+      }
+
+      // 10. Check answer
+      const correct = question.correctOptionId === oId;
+
+      // 11. Calculate points
+      const points = correct ? Math.max(0, question.points ?? 0) : 0;
+
+      // 12. Mark question as answered
+      user.answeredQuestionIds.add(qId);
+      user.hasAnsweredCurrentQuestion = true;
+      user.answeredQuestions++;
+
+      // 13. Update player statistics
+      if (correct) {
+        user.correctAnswers++;
+        user.score += points;
+      } else {
+        user.incorrectAnswers++;
+      }
+
+      user.lastSeenAt = Date.now();
+
+      // 14. Update ranking
+      this.rankingService.updateRanking(session);
+
+      // 15. Save updated state
+      await this.saveSessionToRedis(session);
+
+      // 16. Send updated BattleState
+      socketCallbackWithRoomState(this.createRoomState(session, userId));
+
+      this.logger.log(
+        `Answer attempt | room=${roomId} | user=${userId} | question=${qId} | correct=${correct} | points=${points} | score=${user.score}`,
+      );
+
+      return;
+    } catch (error) {
+      this.logger.error(
+        'Error answering question',
+        error instanceof Error ? error.stack : String(error),
+      );
+
+      onError?.('An error occurred while submitting an answer');
+    }
+  }
+
   // STATE
 
   private createRoomState(session: RoomSession, userId?: string): BattleState {
@@ -571,9 +699,9 @@ export class QuizBattleService {
 
     const timerSeconds = session.room.questionEndsAt
       ? Math.max(
-        0,
-        Math.ceil((session.room.questionEndsAt - Date.now()) / 1000),
-      )
+          0,
+          Math.ceil((session.room.questionEndsAt - Date.now()) / 1000),
+        )
       : 0;
 
     const players = [...session.users.values()];
@@ -628,7 +756,7 @@ export class QuizBattleService {
   ) {
     const session = await this.getRoom(roomId);
     if (!session) {
-      onError?.('Failed to get room');
+      onError?.('Room not found');
       return;
     }
     if (session.room.status !== 'COUNTDOWN') {
@@ -652,7 +780,7 @@ export class QuizBattleService {
     const latest = await this.getRoom(roomId);
 
     if (!latest) {
-      onError?.('Failed to get room');
+      onError?.('Room not found');
       return;
     }
 
@@ -710,7 +838,7 @@ export class QuizBattleService {
   //   const session = await this.getRoom(roomId);
 
   //   if (!session) {
-  //     onError?.('Failed to get room');
+  //     onError?.('Room not found');
   //     return;
   //   }
 
@@ -862,8 +990,8 @@ export class QuizBattleService {
       const session = await this.getRoom(roomId);
 
       if (!session) {
-        onError?.('Failed to get room');
-        this.logger.warn(`Failed to get room | room=${roomId}`);
+        onError?.('Room not found');
+        this.logger.warn(`Room not found | room=${roomId}`);
         return;
       }
 

@@ -38,7 +38,7 @@ export class EventsGateway {
   constructor(
     private readonly eventsService: EventsService,
     private readonly quizBattleService: QuizBattleService,
-  ) { }
+  ) {}
 
   afterInit(server: Server): void {
     this.eventsService.setSocket(server);
@@ -60,7 +60,10 @@ export class EventsGateway {
       const user = this.eventsService.extractUserFromSocket(client);
 
       if (!user) {
-        this.handleError(`Invalid user information for client: ${client.id}`, client);
+        this.handleError(
+          `Invalid user information for client: ${client.id}`,
+          client,
+        );
         client.disconnect(true);
 
         return;
@@ -75,12 +78,16 @@ export class EventsGateway {
       });
 
       // reconnect game
-      await this.quizBattleService.checkReconnectGame(user.id, (state) => {
-        client.emit('battle:reconnect-response', state);
-        // console.log(`Reconnected user ${user.username} (${user.id}) to game with state:`, state);
-      }, (errorMessage) => {
-        this.handleError(errorMessage, client);
-      });
+      await this.quizBattleService.checkReconnectGame(
+        user.id,
+        (state) => {
+          client.emit('battle:reconnect-response', state);
+          // console.log(`Reconnected user ${user.username} (${user.id}) to game with state:`, state);
+        },
+        (errorMessage) => {
+          this.handleError(errorMessage, client);
+        },
+      );
 
       this.logger.log(
         `User connected | ${user.username} | ${user.id} | ${client.id}`,
@@ -293,10 +300,7 @@ export class EventsGateway {
 
     if (!user) {
       this.logger.warn(`Invalid user information for client: ${client.id}`);
-      this.handleError(
-        `An error occurred while leaving the match`,
-        client,
-      );
+      this.handleError(`An error occurred while leaving the match`, client);
       return;
     }
 
@@ -311,16 +315,14 @@ export class EventsGateway {
         );
 
         // Send updated state to remaining players
-        this.server.to(socketIds).emit(
-          'battle:player-left',
-          state,
-        );
+        this.server.to(socketIds).emit('battle:player-left', state);
       },
       (errorMessage) => {
         this.handleError(errorMessage, client);
       },
     );
   }
+
   @SubscribeMessage('battle:reconnect')
   handleReconnect(
     @ConnectedSocket()
@@ -338,4 +340,43 @@ export class EventsGateway {
       client.emit('battle:game-start', state);
     });
   }
+
+  @SubscribeMessage('battle:answer')
+  handleAnswer(
+    @ConnectedSocket()
+    client: Socket,
+    @MessageBody()
+    data: {
+      roomId: string;
+      oId: string;
+      qId: string;
+    },
+  ) {
+    const user = this.eventsService.extractUserFromSocket(client);
+
+    if (!user) {
+      this.logger.warn(`Invalid user information for client: ${client.id}`);
+      this.handleError(`An error occurred while submitting an answer`, client);
+      return;
+    }
+
+    this.quizBattleService.answerAttempt(
+      {
+        roomId: data.roomId,
+        userId: user.id,
+        qId: data.qId,
+        oId: data.oId,
+      },
+      async (state) => {
+        const socketIds = await this.eventsService.findSocketIdsByUserIds(
+          state.players.map((player) => player.userId),
+        );
+        this.server.to(socketIds).emit('battle:lobby-updated', state);
+      },
+      (errorMessage) => {
+        this.handleError(errorMessage, client);
+      },
+    );
+  }
+
 }
