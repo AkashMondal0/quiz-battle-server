@@ -6,7 +6,7 @@ import {
 import {
   RoomQuestion,
   RoomSession,
-} from './interface/room-session.interface';
+} from '../interface/room-session.interface';
 
 @Injectable()
 export class QuizBattleQuestionService {

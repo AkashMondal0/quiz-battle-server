@@ -80,9 +80,9 @@ export class EventsGateway {
       // reconnect game
       await this.quizBattleService.checkReconnectGame(
         user.id,
+        Date.now(),
         (state) => {
           client.emit('battle:reconnect-response', state);
-          // console.log(`Reconnected user ${user.username} (${user.id}) to game with state:`, state);
         },
         (errorMessage) => {
           this.handleError(errorMessage, client);
@@ -336,9 +336,16 @@ export class EventsGateway {
       return;
     }
 
-    this.quizBattleService.reconnectGame(user.id as string, (state) => {
-      client.emit('battle:game-start', state);
-    });
+    this.quizBattleService.reconnectGame(
+      user.id as string,
+      Date.now(),
+      (state) => {
+        client.emit('battle:game-start', state);
+      },
+      (errorMessage) => {
+        this.handleError(errorMessage, client);
+      },
+    );
   }
 
   @SubscribeMessage('battle:answer')
@@ -378,5 +385,4 @@ export class EventsGateway {
       },
     );
   }
-
 }

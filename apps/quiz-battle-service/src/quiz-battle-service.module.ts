@@ -4,10 +4,10 @@ import { QuizBattleService } from './quiz-battle-service.service';
 import { ConfigModule } from '@app/config';
 import { RedisService } from '@app/redis';
 import { EventsGateway } from './events/events.gateway';
-import { QuizBattleQuestionService } from './quiz-battle-question.service';
-import { QuizBattleRankingService } from './quiz-battle-ranking.service';
+import { QuizBattleQuestionService } from './services/quiz-battle-question.service';
+import { QuizBattleRankingService } from './services/quiz-battle-ranking.service';
 import { EventsService } from './events/events.service';
-import { PlayerGameStateService } from './player.game.state.service';
+import { PlayerGameStateService } from './services/player.game.state.service';
 
 @Module({
   imports: [ConfigModule],

@@ -26,6 +26,27 @@ export class PlayerGameStateService {
   }
 
   /**
+   * Start a game for a player.
+   *
+   * Sets an expiration marker key that Redis will emit a keyspace
+   * notification for when it expires. The subscriber in QuizBattleService
+   * listens for `__keyevent@0__:expired` and cleans up the room.
+   */
+  async startGame(
+    userId: string,
+    roomId: string,
+    gameDuration: number = 1000 * 60 * 10,
+  ): Promise<boolean> {
+    await this.redisService.client.set(
+      `game:room:${roomId}:expiration`,
+      Date.now().toString(),
+      'PX',
+      gameDuration,
+    );
+    return true;
+  }
+
+  /**
    * Get the room where the player is currently playing.
    *
    * Returns null if player is not in any game.

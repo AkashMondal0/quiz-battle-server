@@ -4,7 +4,7 @@ import {
   RankingUser,
   RoomRanking,
   RoomSession,
-} from './interface/room-session.interface';
+} from '../interface/room-session.interface';
 
 @Injectable()
 export class QuizBattleRankingService {

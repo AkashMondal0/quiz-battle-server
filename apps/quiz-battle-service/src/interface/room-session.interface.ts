@@ -74,6 +74,8 @@ export interface RoomSessionUser {
   hasAnsweredCurrentQuestion: boolean;
 
   answeredQuestionIds: Set<string>;
+
+  allQuestionsAnswered: boolean;
 }
 
 export interface RoomSessionDetails {
