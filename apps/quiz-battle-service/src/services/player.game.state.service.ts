@@ -1,54 +1,63 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { RedisService } from '@app/redis';
 
 @Injectable()
 export class PlayerGameStateService {
+  private readonly logger = new Logger(PlayerGameStateService.name);
   private readonly KEY = 'game:players:room';
 
   constructor(private readonly redisService: RedisService) {}
 
   /**
    * Put a player into a game.
-   *
    * userId -> roomId
    */
   async enterGame(userId: string, roomId: string): Promise<boolean> {
     const existingRoomId = await this.getRoomId(userId);
 
-    // Player is already in a game.
+    // Player is already in the SAME room → treat as success (reconnect)
+    if (existingRoomId === roomId) {
+      return true;
+    }
+
+    // Player is in a DIFFERENT room → reject
     if (existingRoomId) {
       return false;
     }
 
     await this.redisService.client.hset(this.KEY, userId, roomId);
-
     return true;
   }
 
   /**
-   * Start a game for a player.
+   * Start a game for a room.
    *
    * Sets an expiration marker key that Redis will emit a keyspace
    * notification for when it expires. The subscriber in QuizBattleService
-   * listens for `__keyevent@0__:expired` and cleans up the room.
+   * listens for `__keyevent@0__:expired` and finishes the room.
+   *
+   * Uses SET NX so multiple players calling startGame for the same room
+   * do NOT reset the timer.
    */
   async startGame(
-    userId: string,
     roomId: string,
     gameDuration: number = 1000 * 60 * 10,
   ): Promise<boolean> {
-    await this.redisService.client.set(
-      `game:room:${roomId}:expiration`,
+    const key = `game:room:${roomId}:expiration`;
+
+    const result = await this.redisService.client.set(
+      key,
       Date.now().toString(),
       'PX',
       gameDuration,
+      'NX',
     );
-    return true;
+
+    return result === 'OK';
   }
 
   /**
    * Get the room where the player is currently playing.
-   *
    * Returns null if player is not in any game.
    */
   async getRoomId(userId: string): Promise<string | null> {
@@ -60,7 +69,6 @@ export class PlayerGameStateService {
    */
   async isInGame(userId: string): Promise<boolean> {
     const roomId = await this.getRoomId(userId);
-
     return roomId !== null;
   }
 
@@ -69,14 +77,11 @@ export class PlayerGameStateService {
    */
   async leaveGame(userId: string): Promise<boolean> {
     const removed = await this.redisService.client.hdel(this.KEY, userId);
-
     return removed === 1;
   }
 
   /**
    * Get all players currently in games.
-   *
-   * userId -> roomId
    */
   async getAllPlayers(): Promise<Record<string, string>> {
     return this.redisService.client.hgetall(this.KEY);
@@ -87,7 +92,6 @@ export class PlayerGameStateService {
    */
   async getPlayersInRoom(roomId: string): Promise<string[]> {
     const players = await this.getAllPlayers();
-
     return Object.entries(players)
       .filter(([, playerRoomId]) => playerRoomId === roomId)
       .map(([userId]) => userId);

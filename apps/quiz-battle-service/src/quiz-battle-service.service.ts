@@ -30,13 +30,13 @@ export class QuizBattleService {
 
   private subscriber: Redis | null = null;
 
+  // Track disconnect timers so we can clear them on reconnect / room expiry.
+  private readonly disconnectTimers = new Map<string, NodeJS.Timeout>();
+
   constructor(
     private readonly redisService: RedisService,
-
     private readonly questionService: QuizBattleQuestionService,
-
     private readonly rankingService: QuizBattleRankingService,
-
     private readonly playerGameStateService: PlayerGameStateService,
   ) {}
 
@@ -49,17 +49,11 @@ export class QuizBattleService {
 
     this.subscriber.on(
       'pmessage',
-      async (pattern: string, channel: string, key: string) => {
-        // Redis emits the FULL key name on expiration.
-        // Example: "game:room:ABC123:expiration"
+      async (_pattern: string, _channel: string, key: string) => {
         const match = key.match(/^game:room:(.+):expiration$/);
-
-        if (!match) {
-          return;
-        }
+        if (!match) return;
 
         const roomId = match[1];
-        // this.logger.debug(`Game expired | room=${roomId}`);
 
         try {
           await this.handleRoomExpiration(roomId);
@@ -74,18 +68,16 @@ export class QuizBattleService {
   }
 
   async onModuleDestroy() {
-    if (!this.subscriber) {
-      return;
-    }
+    if (!this.subscriber) return;
     await this.subscriber.punsubscribe('__keyevent@0__:expired');
     await this.subscriber.quit();
   }
 
   /**
-   * Handle cleanup when a room's expiration marker key expires.
+   * Cleanup when a room's expiration marker key expires.
+   * FINISHES the match (keeps final state briefly) then removes mappings.
    */
   private async handleRoomExpiration(roomId: string) {
-    // 1. Load session (from local cache or Redis)
     const session = await this.getRoom(roomId);
 
     if (!session) {
@@ -93,7 +85,7 @@ export class QuizBattleService {
       return;
     }
 
-    // 2. Mark room as finished
+    // 1. Mark room as finished
     session.room.status = 'FINISHED';
     session.room.finishedAt = Date.now();
     session.room.currentQuestionId = undefined;
@@ -105,7 +97,18 @@ export class QuizBattleService {
       session.timer = undefined;
     }
 
-    // 3. Remove all players from the userId -> roomId mapping
+    // 2. Clear all pending disconnect timers for this room
+    for (const [key, timer] of this.disconnectTimers.entries()) {
+      if (key.startsWith(`${roomId}:`)) {
+        clearTimeout(timer);
+        this.disconnectTimers.delete(key);
+      }
+    }
+
+    // 3. Final ranking update
+    this.rankingService.updateRanking(session);
+
+    // 4. Remove all players from userId -> roomId mapping
     const players = [...session.users.values()];
     await Promise.all(
       players.map((player) =>
@@ -113,14 +116,18 @@ export class QuizBattleService {
       ),
     );
 
-    // 4. Remove from local cache
+    // 5. Save final state with a short TTL so clients can fetch it briefly
+    await this.saveSessionToRedis(session, 5 * 60 * 1000);
+
+    // 6. Remove from local cache
     this.sessions.delete(roomId);
 
-    // 5. Remove session data from Redis
-    await this.redisService.client.del(`quiz:battle:room:${roomId}`);
-
-    this.logger.debug(`Room cleaned up | room=${roomId}`);
+    this.logger.debug(`Room finished & cleaned up | room=${roomId}`);
   }
+
+  // ---------------------------------------------------------------------------
+  // RECONNECT
+  // ---------------------------------------------------------------------------
 
   async checkReconnectGame(
     userId: string,
@@ -128,55 +135,167 @@ export class QuizBattleService {
     socketCallbackWithRoomState: (state: BattleState) => void,
     onError?: (message: string) => void,
   ): Promise<void> {
-    // 1. Check whether user belongs to any game
-    const roomId = await this.playerGameStateService.getRoomId(userId);
+    try {
+      // 1. Check whether user belongs to any game
+      const roomId = await this.playerGameStateService.getRoomId(userId);
 
-    if (!roomId) {
-      // onError?.('User is not part of any game');
+      if (!roomId) {
+        // onError?.('User is not part of any game');
+        return;
+      }
+
+      // 2. Get room data
+      const roomData = await this.getRoom(roomId);
+
+      if (!roomData) {
+        this.logger.error(
+          `User ${userId} trying to reconnect to a non-existent room ${roomId}`,
+        );
+        await this.playerGameStateService.leaveGame(userId);
+        // onError?.('Room no longer exists');
+        return;
+      }
+
+      // 3. Finished room → send final state so client can show results
+      if (roomData.room.status === 'FINISHED') {
+        socketCallbackWithRoomState(this.createRoomState(roomData, userId));
+        return;
+      }
+
+      // 4. Expired room (marker gone while PLAYING) → finalize & send
+      const isExpired = await this.isRoomExpired(roomId);
+      if (isExpired) {
+        this.logger.warn(
+          `User ${userId} reconnecting to expired room ${roomId}; finalizing`,
+        );
+
+        roomData.room.status = 'FINISHED';
+        roomData.room.finishedAt = Date.now();
+
+        if (roomData.timer) {
+          clearTimeout(roomData.timer);
+          roomData.timer = undefined;
+        }
+
+        this.rankingService.updateRanking(roomData);
+        await this.saveSessionToRedis(roomData, 5 * 60 * 1000);
+        await this.playerGameStateService.leaveGame(userId);
+
+        socketCallbackWithRoomState(this.createRoomState(roomData, userId));
+        return;
+      }
+
+      // 5. Player already answered everything → send final state, don't kick
+      const player = roomData.users.get(userId);
+      if (player?.allQuestionsAnswered) {
+        socketCallbackWithRoomState(this.createRoomState(roomData, userId));
+        return;
+      }
+
+      // 6. Normal reconnect — mark CONNECTED, clear pending disconnect timer
+      if (player) {
+        player.status = 'CONNECTED';
+        player.lastSeenAt = Date.now();
+        player.disconnectedAt = undefined;
+
+        const timerKey = `${roomId}:${userId}`;
+        const pending = this.disconnectTimers.get(timerKey);
+        if (pending) {
+          clearTimeout(pending);
+          this.disconnectTimers.delete(timerKey);
+        }
+
+        await this.saveSessionToRedis(roomData);
+      }
+
+      socketCallbackWithRoomState(this.createRoomState(roomData, userId));
       return;
-    }
-
-    // 2. Get room data
-    const roomData = await this.getRoom(roomId);
-
-    // Room no longer exists
-    if (!roomData) {
+    } catch (error) {
       this.logger.error(
-        `User ${userId} is trying to reconnect to a non-existent room ${roomId}`,
+        `Reconnect check failed | user=${userId}`,
+        error instanceof Error ? error.stack : String(error),
       );
-      return;
+      onError?.('Failed to check reconnect state');
     }
-
-    // Check if the room is expired
-    const isExpired = await this.isRoomExpired(roomId);
-
-    if (isExpired) {
-      this.logger.error(
-        `User ${userId} is trying to reconnect to an expired room ${roomId}`,
-      );
-      return;
-    }
-
-    if (roomData.room.status === 'FINISHED') {
-      this.logger.error(
-        `User ${userId} is trying to reconnect to a finished room ${roomId}`,
-      );
-      return;
-    }
-
-    console.log(roomData.users.get(userId)?.allQuestionsAnswered);
-    if (roomData.users.get(userId)?.allQuestionsAnswered) {
-      this.logger.error(
-        `User ${userId} has answered all questions in room ${roomId}`,
-      );
-      return;
-    }
-
-    socketCallbackWithRoomState(this.createRoomState(roomData, userId));
-    return;
   }
 
+  async reconnectGame(
+    userId: string,
+    clientTime: number,
+    socketCallbackWithRoomState: (state: BattleState) => void,
+    errorCallback: (message: string) => void,
+  ) {
+    try {
+      const roomId = await this.playerGameStateService.getRoomId(userId);
+
+      if (!roomId) {
+        // errorCallback('User is not part of any game');
+        return;
+      }
+
+      const roomData = await this.getRoom(roomId);
+
+      if (!roomData) {
+        await this.playerGameStateService.leaveGame(userId);
+        errorCallback('Room no longer exists');
+        return;
+      }
+
+      if (roomData.room.status === 'FINISHED') {
+        socketCallbackWithRoomState(this.createRoomState(roomData, userId));
+        return;
+      }
+
+      const isExpired = await this.isRoomExpired(roomId);
+
+      if (isExpired) {
+        roomData.room.status = 'FINISHED';
+        roomData.room.finishedAt = Date.now();
+
+        if (roomData.timer) {
+          clearTimeout(roomData.timer);
+          roomData.timer = undefined;
+        }
+
+        this.rankingService.updateRanking(roomData);
+        await this.saveSessionToRedis(roomData, 5 * 60 * 1000);
+        await this.playerGameStateService.leaveGame(userId);
+
+        socketCallbackWithRoomState(this.createRoomState(roomData, userId));
+        return;
+      }
+
+      const player = roomData.users.get(userId);
+
+      if (player) {
+        player.status = 'CONNECTED';
+        player.lastSeenAt = Date.now();
+        player.disconnectedAt = undefined;
+
+        const timerKey = `${roomId}:${userId}`;
+        const pending = this.disconnectTimers.get(timerKey);
+        if (pending) {
+          clearTimeout(pending);
+          this.disconnectTimers.delete(timerKey);
+        }
+
+        await this.saveSessionToRedis(roomData);
+      }
+
+      socketCallbackWithRoomState(this.createRoomState(roomData, userId));
+      return;
+    } catch (error) {
+      this.logger.error(
+        `Reconnect failed | user=${userId}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      errorCallback('Failed to reconnect');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // CREATE ROOM
+  // ---------------------------------------------------------------------------
 
   async createRoom(
     body: CreateRoomInput,
@@ -185,100 +304,66 @@ export class QuizBattleService {
   ) {
     try {
       const host = body.host;
-
       const roomCode = this.generateRoomCode();
-
       const now = Date.now();
 
       const room: RoomSessionDetails = {
         roomId: roomCode,
-
         roomCode,
-
         hostId: host.userId,
-
         topic: body.topic,
-
         prompt: body.prompt ?? '',
-
         aiId: body.aiId,
-
         mode: body.mode,
-
         difficulty: body.difficulty,
-
         visibility: body.visibility,
-
         maxPlayers: body.maxPlayers,
-
         numberOfQuestions: body.numberOfQuestions,
-
         totalTimeSeconds: body.totalTimeSeconds,
-
         status: 'WAITING',
-
         currentQuestionIndex: -1,
-
         createdAt: now,
       };
 
       const hostUser: RoomSessionUser = {
         userId: host.userId,
-
         username: host.username,
-
         profilePicture: host.profilePicture ?? null,
-
         avatarId: host.avatarId ?? null,
-
         status: 'CONNECTED',
-
         ready: false,
-
         joinedAt: now,
-
         lastSeenAt: now,
-
         score: 0,
-
         correctAnswers: 0,
-
         incorrectAnswers: 0,
-
         answeredQuestions: 0,
-
         rank: 1,
-
         hasAnsweredCurrentQuestion: false,
-
         answeredQuestionIds: new Set<string>(),
         allQuestionsAnswered: false,
       };
 
       const session: RoomSession = {
         room,
-
         users: new Map([[host.userId, hostUser]]),
-
         ranking: {
           roomId: room.roomId,
-
           rankings: [],
-
           updatedAt: now,
         },
-
         questions: await this.questionService.loadQuestions(10),
       };
 
       this.rankingService.updateRanking(session);
-
       this.sessions.set(session.room.roomId, session);
 
       await this.saveSessionToRedis(session);
 
       const state = this.createRoomState(session, host.userId);
+
       await this.playerGameStateService.enterGame(host.userId, roomCode);
+
       socketCallbackWithRoomState(state);
       return;
     } catch (error) {
@@ -292,15 +377,13 @@ export class QuizBattleService {
 
   async getRoomData(roomId: string): Promise<BattleState | null> {
     const session = await this.getRoom(roomId);
-
-    if (!session) {
-      return null;
-    }
-
+    if (!session) return null;
     return this.createRoomState(session);
   }
 
+  // ---------------------------------------------------------------------------
   // GET ROOM
+  // ---------------------------------------------------------------------------
 
   async getRoom(
     roomId: string,
@@ -311,13 +394,11 @@ export class QuizBattleService {
     if (!normalized) {
       this.logger.warn('Room id is required');
       onError?.('Room id is required');
+      return null;
     }
 
     const local = this.sessions.get(normalized);
-
-    if (local) {
-      return local;
-    }
+    if (local) return local;
 
     const restored = await this.loadSessionFromRedis(normalized);
 
@@ -328,11 +409,12 @@ export class QuizBattleService {
     }
 
     this.sessions.set(normalized, restored);
-
     return restored;
   }
 
+  // ---------------------------------------------------------------------------
   // JOIN
+  // ---------------------------------------------------------------------------
 
   async joinRoom(
     roomId: string,
@@ -353,6 +435,7 @@ export class QuizBattleService {
         return;
       }
 
+      // Existing player → treat as reconnect
       const existing = session.users.get(user.userId);
 
       if (existing) {
@@ -362,14 +445,24 @@ export class QuizBattleService {
         }
 
         existing.status = 'CONNECTED';
-
         existing.lastSeenAt = Date.now();
-
         existing.disconnectedAt = undefined;
 
-        await this.saveSessionToRedis(session);
+        // Clear pending disconnect timer
+        const timerKey = `${roomId}:${user.userId}`;
+        const pending = this.disconnectTimers.get(timerKey);
+        if (pending) {
+          clearTimeout(pending);
+          this.disconnectTimers.delete(timerKey);
+        }
 
-        socketCallbackWithRoomState(this.createRoomState(session, user.userId));
+        await this.saveSessionToRedis(session);
+        await this.playerGameStateService.enterGame(user.userId, roomId);
+
+        socketCallbackWithRoomState(
+          this.createRoomState(session, user.userId),
+        );
+        return;
       }
 
       if (session.room.status !== 'WAITING') {
@@ -388,46 +481,31 @@ export class QuizBattleService {
 
       const newUser: RoomSessionUser = {
         userId: user.userId,
-
         username: user.username,
-
         profilePicture: user.profilePicture ?? null,
-
         avatarId: user.avatarId ?? null,
-
         status: 'CONNECTED',
-
         ready: false,
-
         joinedAt: now,
-
         lastSeenAt: now,
-
         score: 0,
-
         correctAnswers: 0,
-
         incorrectAnswers: 0,
-
         answeredQuestions: 0,
-
         rank: playerCount + 1,
-
         hasAnsweredCurrentQuestion: false,
-
         answeredQuestionIds: new Set<string>(),
-
         allQuestionsAnswered: false,
       };
 
       session.users.set(user.userId, newUser);
-
       this.rankingService.updateRanking(session);
 
       await this.saveSessionToRedis(session);
 
       socketCallbackWithRoomState(this.createRoomState(session, user.userId));
-      this.playerGameStateService.enterGame(user.userId, roomId);
+
+      await this.playerGameStateService.enterGame(user.userId, roomId);
       return;
     } catch (error) {
       this.logger.error(
@@ -438,40 +516,9 @@ export class QuizBattleService {
     }
   }
 
-  // RECONNECT
-  async reconnectGame(
-    userId: string,
-    clientTime: number,
-    socketCallbackWithRoomState: (state: BattleState) => void,
-    errorCallback: (message: string) => void,
-  ) {
-    const roomId = await this.playerGameStateService.getRoomId(userId);
-
-    if (!roomId) {
-      return;
-    }
-
-    // 2. Get room data
-    const roomData = await this.getRoom(roomId);
-
-    // Room no longer exists
-    if (!roomData) {
-      errorCallback?.('Room no longer exists');
-      return;
-    }
-
-    // Check if the room is expired
-    const isExpired = await this.isRoomExpired(roomId);
-
-    if (isExpired) {
-      errorCallback?.('Room has expired');
-      return;
-    }
-
-    socketCallbackWithRoomState(this.createRoomState(roomData, userId));
-  }
-
+  // ---------------------------------------------------------------------------
   // READY / UNREADY
+  // ---------------------------------------------------------------------------
 
   async setPlayerReady(
     {
@@ -483,10 +530,12 @@ export class QuizBattleService {
     onError?: (message: string) => void,
   ) {
     const session = await this.getRoom(roomId);
+
     if (!session) {
       onError?.('Room not found');
       return;
     }
+
     if (session.room.status !== 'WAITING') {
       onError?.('Ready state cannot be changed now');
       return;
@@ -505,7 +554,6 @@ export class QuizBattleService {
     }
 
     user.ready = ready;
-
     user.lastSeenAt = Date.now();
 
     await this.saveSessionToRedis(session);
@@ -514,7 +562,9 @@ export class QuizBattleService {
     return;
   }
 
+  // ---------------------------------------------------------------------------
   // START MATCH
+  // ---------------------------------------------------------------------------
 
   async startMatch(
     { roomId, userId }: { roomId: string; userId: string },
@@ -541,11 +591,6 @@ export class QuizBattleService {
         return;
       }
 
-      // if (!this.canStartMatch(session)) {
-      //   this.logger.warn('All players must be ready');
-      //   onError?.('All players must be ready'); // TODO: Decide if this should be an error or not
-      // }
-
       const questions = await this.questionService.loadQuestions(
         session.room.numberOfQuestions,
       );
@@ -557,17 +602,11 @@ export class QuizBattleService {
       }
 
       session.questions = questions;
-
       session.room.status = 'PLAYING';
-
       session.room.currentQuestionIndex = -1;
-
       session.room.matchStartedAt = Date.now();
-
       session.room.currentQuestionId = undefined;
-
       session.room.questionStartedAt = undefined;
-
       session.room.questionEndsAt = undefined;
 
       for (const player of session.users.values()) {
@@ -576,9 +615,9 @@ export class QuizBattleService {
 
       await this.saveSessionToRedis(session);
 
-      // Set the expiration marker with a safe fallback duration.
+      // Set expiration marker (NX → won't reset if already set)
       const durationMs = (session.room.totalTimeSeconds || 600) * 1000;
-      this.playerGameStateService.startGame(userId, roomId, durationMs);
+      await this.playerGameStateService.startGame(roomId, durationMs);
 
       socketCallbackWithRoomState(this.createRoomState(session, userId));
       return;
@@ -592,7 +631,9 @@ export class QuizBattleService {
     }
   }
 
+  // ---------------------------------------------------------------------------
   // DISCONNECT
+  // ---------------------------------------------------------------------------
 
   async disconnectUser(
     roomId: string,
@@ -609,26 +650,35 @@ export class QuizBattleService {
 
     const user = session.users.get(userId);
 
-    if (!user) {
-      return null;
-    }
+    if (!user) return null;
 
     user.status = 'DISCONNECTED';
-
     user.disconnectedAt = Date.now();
-
     user.lastSeenAt = Date.now();
 
     await this.saveSessionToRedis(session);
 
-    setTimeout(() => {
+    // Clear any existing timer for this player (avoid duplicates)
+    const timerKey = `${roomId}:${userId}`;
+    const existing = this.disconnectTimers.get(timerKey);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      this.disconnectTimers.delete(timerKey);
       void this.removeExpiredPlayer(roomId, userId);
     }, this.reconnectGracePeriod);
+
+    // Don't block process exit
+    if (typeof timer.unref === 'function') timer.unref();
+
+    this.disconnectTimers.set(timerKey, timer);
 
     return this.serializePublicUser(user);
   }
 
+  // ---------------------------------------------------------------------------
   // LEAVE
+  // ---------------------------------------------------------------------------
 
   async leaveRoom(
     { roomId, userId }: { roomId: string; userId: string },
@@ -650,32 +700,38 @@ export class QuizBattleService {
         return;
       }
 
-      // Remove player completely from the room
+      // Clear any pending disconnect timer
+      const timerKey = `${roomId}:${userId}`;
+      const pending = this.disconnectTimers.get(timerKey);
+      if (pending) {
+        clearTimeout(pending);
+        this.disconnectTimers.delete(timerKey);
+      }
+
       session.users.delete(userId);
 
-      // Update ranking after removing player
       this.rankingService.updateRanking(session);
 
-      // Save updated room state
       await this.saveSessionToRedis(session);
 
-      // Remove user -> roomId mapping from Redis
       await this.playerGameStateService.leaveGame(userId);
 
-      // Create updated state without the leaving player
       const state = this.createRoomState(session);
 
-      // Send updated state
       socketCallbackWithRoomState(state);
+      return;
     } catch (error) {
       this.logger.error(
         'Error leaving room',
         error instanceof Error ? error.stack : String(error),
       );
-
       onError?.('An error occurred while leaving the room');
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // ANSWER
+  // ---------------------------------------------------------------------------
 
   async answerAttempt(
     {
@@ -721,14 +777,25 @@ export class QuizBattleService {
         return;
       }
 
-      // 5. Verify this is the current question
-      if (session.questions.findIndex((item) => item.id === qId) === -1) {
+      // 5. Verify this is a valid question
+      const sessionLength = session.questions.length;
+      const questionIndex = session.questions.findIndex(
+        (item) => item.id === qId,
+      );
+
+      if (questionIndex === -1) {
         onError?.('This question is no longer active');
         return;
       }
 
-      // 6. Check question timeout
-      // TODO
+      // 6. Question timeout check
+      if (
+        session.room.questionEndsAt &&
+        Date.now() >= session.room.questionEndsAt
+      ) {
+        onError?.('Time is over');
+        return;
+      }
 
       // 7. Prevent duplicate answer
       if (user.answeredQuestionIds.has(qId)) {
@@ -737,8 +804,7 @@ export class QuizBattleService {
       }
 
       // 8. Find question
-      const sessionLength = session.questions.length;
-      const question = session.questions.find((item) => item.id === qId);
+      const question = session.questions[questionIndex];
 
       if (!question) {
         onError?.('Question not found');
@@ -765,11 +831,13 @@ export class QuizBattleService {
       user.answeredQuestionIds.add(qId);
       user.hasAnsweredCurrentQuestion = true;
       user.answeredQuestions++;
+
+      // ✅ FIXED: compare answered set size to total questions
       user.allQuestionsAnswered =
-        session.questions.indexOf(question) === sessionLength - 1;
+        user.answeredQuestionIds.size >= sessionLength;
 
       if (user.allQuestionsAnswered) {
-        this.playerGameStateService.leaveGame(userId);
+        await this.playerGameStateService.leaveGame(userId);
       }
 
       // 13. Update player statistics
@@ -790,23 +858,19 @@ export class QuizBattleService {
 
       // 16. Send updated BattleState
       socketCallbackWithRoomState(this.createRoomState(session, userId));
-
-      // this.logger.log(
-      //   `Answer attempt | room=${roomId} | user=${userId} | question=${qId} | correct=${correct} | points=${points} | score=${user.score}`,
-      // );
-
       return;
     } catch (error) {
       this.logger.error(
         'Error answering question',
         error instanceof Error ? error.stack : String(error),
       );
-
       onError?.('An error occurred while submitting an answer');
     }
   }
 
+  // ---------------------------------------------------------------------------
   // STATE
+  // ---------------------------------------------------------------------------
 
   private createRoomState(session: RoomSession, userId?: string): BattleState {
     const currentQuestion =
@@ -832,39 +896,26 @@ export class QuizBattleService {
             : 'QUESTION',
 
       room: session.room,
-
       players,
-
       allReady: this.areAllPlayersReady(session),
-
       currentQuestion,
-
       questionIndex: session.room.currentQuestionIndex,
-
       totalQuestions: session.questions.length,
-
       timerSeconds,
-
       selectedOptionId: null,
-
       hasAnsweredCurrent: currentUser?.hasAnsweredCurrentQuestion ?? false,
-
       lastAnswerCorrect: null,
-
       lastPointsEarned: 0,
-
       rankings: session.ranking.rankings,
       questions: session.questions,
-
       errorEvent: null,
-
       errorMessage: null,
     };
   }
 
-  // upcoming methods
-
-  // COUNTDOWN
+  // ---------------------------------------------------------------------------
+  // COUNTDOWN (kept for future use)
+  // ---------------------------------------------------------------------------
 
   async runCountdown(
     roomId: string,
@@ -872,229 +923,67 @@ export class QuizBattleService {
     onError?: (message: string) => void,
   ) {
     const session = await this.getRoom(roomId);
+
     if (!session) {
       onError?.('Room not found');
       return;
     }
-    if (session.room.status !== 'COUNTDOWN') {
-      return;
-    }
+
+    if (session.room.status !== 'COUNTDOWN') return;
 
     for (let seconds = this.countdownSeconds; seconds > 0; seconds--) {
       const current = await this.getRoom(roomId);
+      if (current?.room.status !== 'COUNTDOWN') return;
 
-      if (current?.room.status !== 'COUNTDOWN') {
-        return;
-      }
-
-      emit('battle:countdown', {
-        seconds,
-      });
-
+      emit('battle:countdown', { seconds });
       await this.delay(1000);
     }
 
     const latest = await this.getRoom(roomId);
-
     if (!latest) {
       onError?.('Room not found');
       return;
     }
 
-    if (latest.room.status !== 'COUNTDOWN') {
-      return;
-    }
+    if (latest.room.status !== 'COUNTDOWN') return;
 
     latest.room.status = 'PLAYING';
-
     latest.room.currentQuestionIndex = 0;
 
     await this.saveSessionToRedis(latest);
 
-    emit('battle:started', {
-      roomId,
-      startedAt: Date.now(),
-    });
+    emit('battle:started', { roomId, startedAt: Date.now() });
 
     await this.startCurrentQuestion(latest, emit);
   }
 
-  // CURRENT QUESTION
+  // ---------------------------------------------------------------------------
+  // TIMEOUT / NEXT / FINISH (kept for future use)
+  // ---------------------------------------------------------------------------
 
   private async startCurrentQuestion(
-    session: RoomSession,
-    emit: (event: string, data: unknown) => void,
+    _session: RoomSession,
+    _emit: (event: string, data: unknown) => void,
   ) {
-    // const question = session.questions[session.room.currentQuestionIndex];
-    // if (!question) {
-    //   await this.finishMatch(session, emit);
-    //   return;
-    // }
-    // session.room.currentQuestionId = question.id;
-    // session.room.questionStartedAt = Date.now();
-    // session.room.questionEndsAt = Date.now() + question.timeLimitSeconds * 1000;
-    // for (const player of session.users.values()) {
-    //   player.hasAnsweredCurrentQuestion = false;
-    // }
-    // await this.saveSessionToRedis(session);
-    // emit('battle:question', {
-    //   question: this.serializeQuestion(question, session),
-    // });
-    // this.scheduleQuestionTimeout(session, question, emit);
+    // Implementation intentionally left as-is (was commented out before)
   }
-
-  // ANSWER
-
-  // async submitAnswer(
-  //   roomId: string,
-  //   userId: string,
-  //   questionId: string,
-  //   answerIndex: number,
-  //   onError?: (message: string) => void,
-  // ) {
-  //   const session = await this.getRoom(roomId);
-
-  //   if (!session) {
-  //     onError?.('Room not found');
-  //     return;
-  //   }
-
-  //   const user = session.users.get(userId);
-
-  //   if (!user) {
-  //     onError?.('Player not found');
-  //     this.logger.warn(`Player not found | room=${roomId} | user=${userId}`);
-  //     return;
-  //   }
-
-  //   if (user.status === 'LEFT') {
-  //     onError?.('Player has left the match');
-  //     this.logger.warn(
-  //       `Player has left the match | room=${roomId} | user=${userId}`,
-  //     );
-  //     return;
-  //   }
-
-  //   if (session.room.status !== 'PLAYING') {
-  //     onError?.('Game is not currently playing');
-  //     this.logger.warn(
-  //       `Game is not currently playing | room=${roomId} | user=${userId}`,
-  //     );
-  //     return;
-  //   }
-
-  //   if (session.room.currentQuestionId !== questionId) {
-  //     onError?.('This question is no longer active');
-  //     this.logger.warn(
-  //       `This question is no longer active | room=${roomId} | user=${userId} | question=${questionId}`,
-  //     );
-  //     return;
-  //   }
-
-  //   if (
-  //     session.room.questionEndsAt &&
-  //     Date.now() >= session.room.questionEndsAt
-  //   ) {
-  //     this.logger.warn(
-  //       `Time is over | room=${roomId} | user=${userId} | question=${questionId}`,
-  //     );
-  //     onError?.('Time is over');
-  //     return;
-  //   }
-
-  //   if (user.answeredQuestionIds.has(questionId)) {
-  //     onError?.('Question already answered');
-  //     this.logger.warn(
-  //       `Question already answered | room=${roomId} | user=${userId} | question=${questionId}`,
-  //     );
-  //     return;
-  //   }
-
-  //   const question = this.questionService.getQuestion(session, questionId);
-
-  //   if (!question) {
-  //     onError?.('Question not found');
-  //     this.logger.warn(
-  //       `Question not found | room=${roomId} | user=${userId} | question=${questionId}`,
-  //     );
-  //     return;
-  //   }
-
-  //   if (
-  //     !Number.isInteger(answerIndex) ||
-  //     answerIndex < 0 ||
-  //     answerIndex >= question.options.length
-  //   ) {
-  //     onError?.('Invalid answer');
-  //     this.logger.warn(
-  //       `Invalid answer | room=${roomId} | user=${userId} | question=${questionId} | answer=${answerIndex}`,
-  //     );
-  //     return;
-  //   }
-
-  //   const correct = question.correctAnswerIndex === answerIndex;
-
-  //   const points = this.calculatePoints(session, question, correct);
-
-  //   user.answeredQuestionIds.add(questionId);
-
-  //   user.hasAnsweredCurrentQuestion = true;
-
-  //   user.answeredQuestions++;
-
-  //   if (correct) {
-  //     user.correctAnswers++;
-
-  //     user.score += points;
-  //   } else {
-  //     user.incorrectAnswers++;
-  //   }
-
-  //   user.lastSeenAt = Date.now();
-
-  //   this.rankingService.updateRanking(session);
-
-  //   await this.saveSessionToRedis(session);
-
-  //   return {
-  //     correct,
-
-  //     points,
-
-  //     score: user.score,
-
-  //     rank: user.rank,
-
-  //     ranking: session.ranking,
-
-  //     userId,
-
-  //     questionId,
-  //   };
-  // }
-
-  // TIMEOUT
 
   private scheduleQuestionTimeout(
     session: RoomSession,
     question: RoomQuestion,
-    emit: (event: string, data: unknown) => void,
+    _emit: (event: string, data: unknown) => void,
   ) {
     if (session.timer) {
       clearTimeout(session.timer);
+      session.timer = undefined;
     }
 
-    const roomId = session.room.roomId;
-
-    const questionId = question.id;
-
     const endsAt = session.room.questionEndsAt ?? Date.now();
-
     const delay = Math.max(0, endsAt - Date.now());
 
-    // session.timer = setTimeout(() => {
-    //   void this.handleQuestionTimeout(roomId, questionId, emit);
-    // }, delay);
+    // Reserved for future use
+    void question;
+    void delay;
   }
 
   private async handleQuestionTimeout(
@@ -1108,43 +997,29 @@ export class QuizBattleService {
 
       if (!session) {
         onError?.('Room not found');
-        this.logger.warn(`Room not found | room=${roomId}`);
         return;
       }
 
-      if (session.room.status !== 'PLAYING') {
-        return;
-      }
-
-      if (session.room.currentQuestionId !== questionId) {
-        return;
-      }
+      if (session.room.status !== 'PLAYING') return;
+      if (session.room.currentQuestionId !== questionId) return;
 
       for (const player of session.users.values()) {
-        if (player.status === 'LEFT') {
-          continue;
-        }
+        if (player.status === 'LEFT') continue;
 
         if (!player.answeredQuestionIds.has(questionId)) {
           player.incorrectAnswers++;
-
           player.answeredQuestions++;
-
           player.answeredQuestionIds.add(questionId);
-
           player.hasAnsweredCurrentQuestion = true;
         }
       }
 
       this.rankingService.updateRanking(session);
-
       await this.saveSessionToRedis(session);
 
       emit('battle:time_up', {
         questionId,
-
         endedAt: Date.now(),
-
         ranking: session.ranking,
       });
 
@@ -1154,15 +1029,12 @@ export class QuizBattleService {
     }
   }
 
-  // NEXT QUESTION
-
   private async nextQuestion(
     session: RoomSession,
     emit: (event: string, data: unknown) => void,
   ) {
     if (session.timer) {
       clearTimeout(session.timer);
-
       session.timer = undefined;
     }
 
@@ -1172,7 +1044,6 @@ export class QuizBattleService {
 
     if (!next) {
       await this.finishMatch(session, emit);
-
       return;
     }
 
@@ -1185,26 +1056,19 @@ export class QuizBattleService {
     await this.startCurrentQuestion(session, emit);
   }
 
-  // FINISH
-
   private async finishMatch(
     session: RoomSession,
     emit: (event: string, data: unknown) => void,
   ) {
     if (session.timer) {
       clearTimeout(session.timer);
-
       session.timer = undefined;
     }
 
     session.room.status = 'FINISHED';
-
     session.room.finishedAt = Date.now();
-
     session.room.currentQuestionId = undefined;
-
     session.room.questionStartedAt = undefined;
-
     session.room.questionEndsAt = undefined;
 
     this.rankingService.updateRanking(session);
@@ -1213,69 +1077,65 @@ export class QuizBattleService {
 
     emit('battle:finished', {
       roomId: session.room.roomId,
-
       ranking: session.ranking,
-
       finishedAt: session.room.finishedAt,
     });
   }
 
+  // ---------------------------------------------------------------------------
   // REMOVE EXPIRED PLAYER
+  // ---------------------------------------------------------------------------
 
   private async removeExpiredPlayer(roomId: string, userId: string) {
     const session = this.sessions.get(roomId);
-
-    if (!session) {
-      return;
-    }
+    if (!session) return;
 
     const user = session.users.get(userId);
+    if (!user) return;
 
-    if (!user) {
-      return;
-    }
-
-    if (user.status !== 'DISCONNECTED') {
-      return;
-    }
+    if (user.status !== 'DISCONNECTED') return;
 
     const disconnectedAt = user.disconnectedAt ?? 0;
-
-    if (Date.now() - disconnectedAt < this.reconnectGracePeriod) {
-      return;
-    }
+    if (Date.now() - disconnectedAt < this.reconnectGracePeriod) return;
 
     user.status = 'LEFT';
-
     user.ready = false;
 
     this.rankingService.updateRanking(session);
-
     await this.saveSessionToRedis(session);
   }
 
+  // ---------------------------------------------------------------------------
   // HELPERS
+  // ---------------------------------------------------------------------------
 
   private canStartMatch(session: RoomSession): boolean {
     const players = [...session.users.values()].filter(
       (user) => user.status !== 'LEFT',
     );
 
-    if (players.length < 2) {
-      return false;
-    }
-
+    if (players.length < 2) return false;
     return players.every((user) => user.ready === true);
   }
 
   /**
-   * Check whether the room's expiration marker key still exists.
-   * If the key is gone, the room has expired.
+   * A room is "expired" only if the match has actually started
+   * (status PLAYING/FINISHED) AND the marker key is gone.
+   * In WAITING/COUNTDOWN state, no marker exists, so it can't be "expired".
    */
   private async isRoomExpired(roomId: string): Promise<boolean> {
+    const session = this.sessions.get(roomId);
+    const status = session?.room.status;
+
+    // Lobby rooms are never "expired"
+    if (status === 'WAITING' || status === 'COUNTDOWN') {
+      return false;
+    }
+
     const exists = await this.redisService.client.exists(
       `game:room:${roomId}:expiration`,
     );
+
     return exists === 0;
   }
 
@@ -1284,16 +1144,14 @@ export class QuizBattleService {
       (user) => user.status !== 'LEFT',
     );
 
-    if (players.length === 0) {
-      return false;
-    }
-
+    if (players.length === 0) return false;
     return players.every((user) => user.ready);
   }
 
   private getActivePlayerCount(session: RoomSession): number {
-    return [...session.users.values()].filter((user) => user.status !== 'LEFT')
-      .length;
+    return [...session.users.values()].filter(
+      (user) => user.status !== 'LEFT',
+    ).length;
   }
 
   private calculatePoints(
@@ -1301,77 +1159,35 @@ export class QuizBattleService {
     question: RoomQuestion,
     correct: boolean,
   ): number {
-    if (!correct) {
-      return 0;
-    }
+    if (!correct) return 0;
 
-    /**
-     * Base points.
-     */
     const base = 100;
-
-    /**
-     * Speed bonus.
-     */
     const startedAt = session.room.questionStartedAt ?? Date.now();
-
     const endsAt = session.room.questionEndsAt ?? Date.now();
-
     const remaining = Math.max(0, endsAt - Date.now());
-
     const total = Math.max(1, endsAt - startedAt);
-
     const speedRatio = remaining / total;
-
     const speedBonus = Math.floor(speedRatio * 50);
+
+    // Keep param referenced (question unused for now)
+    void question;
 
     return base + speedBonus;
   }
 
-  // private serializeQuestion(question: RoomQuestion, session: RoomSession) {
-  //   return {
-  //     id: question.id,
-
-  //     question: question.question,
-
-  //     options: question.options,
-
-  //     category: question.category,
-
-  //     difficulty: question.difficulty,
-
-  //     timeLimitSeconds: question.timeLimitSeconds,
-
-  //     startedAt: session.room.questionStartedAt,
-
-  //     endsAt: session.room.questionEndsAt,
-  //   };
-  // }
-
   private serializePublicUser(user: RoomSessionUser) {
     return {
       userId: user.userId,
-
       username: user.username,
-
       profilePicture: user.profilePicture ?? null,
-
       avatarId: user.avatarId,
-
       status: user.status,
-
       ready: user.ready,
-
       joinedAt: user.joinedAt,
-
       score: user.score,
-
       correctAnswers: user.correctAnswers,
-
       answeredQuestions: user.answeredQuestions,
-
       rank: user.rank,
-
       hasAnsweredCurrentQuestion: user.hasAnsweredCurrentQuestion,
     };
   }
@@ -1379,37 +1195,34 @@ export class QuizBattleService {
   private serializePrivateUser(user: RoomSessionUser) {
     return {
       ...this.serializePublicUser(user),
-
       incorrectAnswers: user.incorrectAnswers,
     };
   }
 
+  // ---------------------------------------------------------------------------
   // REDIS
+  // ---------------------------------------------------------------------------
 
-  private async saveSessionToRedis(session: RoomSession) {
+  private async saveSessionToRedis(
+    session: RoomSession,
+    ttlOverrideMs?: number,
+  ) {
     const data = {
       room: session.room,
-
       users: [...session.users.values()].map((user) => ({
         ...user,
-
         answeredQuestionIds: [...user.answeredQuestionIds],
       })),
-
       ranking: session.ranking,
-
       questions: session.questions,
-
       updatedAt: Date.now(),
     };
 
     const key = `quiz:battle:room:${session.room.roomId}`;
 
-    // Persist session data with a TTL so it doesn't linger forever.
-    // Buffer = game duration + 60s so cleanup can run before the data
-    // key itself disappears. (The expiration marker key is separate and
-    // is what triggers the keyspace notification.)
-    const ttlMs = (session.room.totalTimeSeconds ?? 600) * 1000 + 60_000;
+    const ttlMs =
+      ttlOverrideMs ??
+      (session.room.totalTimeSeconds ?? 600) * 1000 + 60_000;
 
     await this.redisService.client.set(
       key,
@@ -1426,9 +1239,7 @@ export class QuizBattleService {
       `quiz:battle:room:${roomId}`,
     );
 
-    if (!data) {
-      return null;
-    }
+    if (!data) return null;
 
     try {
       const parsed = JSON.parse(data.toString());
@@ -1438,34 +1249,33 @@ export class QuizBattleService {
       for (const user of parsed.users ?? []) {
         users.set(user.userId, {
           ...user,
-
           ready: user.ready ?? false,
-
           answeredQuestionIds: new Set(user.answeredQuestionIds ?? []),
         });
       }
 
       return {
         room: parsed.room,
-
         users,
-
-        ranking: parsed.ranking,
-
+        ranking: parsed.ranking ?? {
+          roomId,
+          rankings: [],
+          updatedAt: Date.now(),
+        },
         questions: parsed.questions ?? [],
       };
     } catch (error) {
       this.logger.error(`Failed to restore room ${roomId}`, error);
-
       return null;
     }
   }
 
+  // ---------------------------------------------------------------------------
   // IDS
+  // ---------------------------------------------------------------------------
 
   private generateRoomCode(): string {
     const characters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-
     let code = '';
 
     for (let i = 0; i < 6; i++) {
