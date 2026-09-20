@@ -1,14 +1,7 @@
 export type RoomStatus =
-  | 'WAITING'
-  | 'COUNTDOWN'
-  | 'PLAYING'
-  | 'FINISHED'
-  | 'CANCELLED';
+  'WAITING' | 'COUNTDOWN' | 'PLAYING' | 'FINISHED' | 'CANCELLED';
 
-export type PlayerStatus =
-  | 'CONNECTED'
-  | 'DISCONNECTED'
-  | 'LEFT';
+export type PlayerStatus = 'CONNECTED' | 'DISCONNECTED' | 'LEFT';
 
 export interface RoomQuestion {
   id?: string | null;
@@ -40,14 +33,12 @@ export interface QuestionStatsDto {
   optionDistribution?: Record<string, number> | null;
 }
 
-
-
 export interface RoomSessionUser {
   userId: string;
 
   username: string;
 
-  profilePicture?: string | null;
+  avatar?: string | null;
 
   avatarId?: string | null;
 
@@ -157,12 +148,7 @@ export interface RoomSession {
 }
 
 export type BattlePhase =
-  | 'IDLE'
-  | 'LOBBY'
-  | 'COUNTDOWN'
-  | 'QUESTION'
-  | 'FINISHED'
-  | 'CANCELLED';
+  'IDLE' | 'LOBBY' | 'COUNTDOWN' | 'QUESTION' | 'FINISHED' | 'CANCELLED';
 
 export interface BattleState {
   phase: BattlePhase;

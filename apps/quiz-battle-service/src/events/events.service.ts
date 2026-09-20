@@ -1,97 +1,42 @@
 import { RedisService } from '@app/redis';
-
-import {
-  Injectable,
-  Logger,
-} from '@nestjs/common';
-
-import {
-  Server,
-  Socket,
-} from 'socket.io';
+import { Injectable, Logger } from '@nestjs/common';
+import { Server, Socket } from 'socket.io';
 
 interface SocketUser {
   id: string;
   username: string;
-  profilePicture?: string;
+  avatar?: string;
   avatarId?: string;
 }
 
 @Injectable()
 export class EventsService {
-  private readonly logger = new Logger(
-    EventsService.name,
-  );
+  private readonly logger = new Logger(EventsService.name);
 
   private server?: Server;
 
-  /**
-   * Redis hash:
-   *
-   * SOCKET:CLIENTS
-   *
-   * userId -> socketId
-   */
-  private readonly socketKey =
-    'SOCKET:CLIENTS';
+  private readonly socketKey = 'SOCKET:CLIENTS';
 
-  constructor(
-    private readonly redisService: RedisService,
-  ) {}
+  constructor(private readonly redisService: RedisService) {}
 
-  /**
-   * Called by gateway after Socket.IO server is ready.
-   */
+  // Called by gateway after Socket.IO server is ready.
   setSocket(server: Server): void {
     this.server = server;
 
-    this.logger.log(
-      'Socket.IO server registered in EventsService',
-    );
+    this.logger.log('Socket.IO server registered in EventsService');
   }
 
-  
-   // Extract user information from handshake.
-   //
-   // Client connects like:
-   //
-   // io("http://localhost:5000/event", {
-   //   transports: ["websocket"],
-   //   query: {
-   //     id: "123",
-   //     username: "akash",
-   //     profilePicture: "..."
-   //   }
-   // })
-   
-  extractUserFromSocket(
-    client: Socket,
-  ): SocketUser | null {
-    const {
-      id,
-      username,
-      profilePicture,
-      avatarId
-    } = client.handshake.query;
+  extractUserFromSocket(client: Socket): SocketUser | null {
+    const { id, username, avatar, avatarId } = client.handshake.query;
 
-    if (
-      typeof id !== 'string' ||
-      !id.trim()
-    ) {
-      this.logger.warn(
-        `Missing user id | socket=${client.id}`,
-      );
+    if (typeof id !== 'string' || !id.trim()) {
+      this.logger.warn(`Missing user id | socket=${client.id}`);
 
       return null;
     }
 
-    if (
-      typeof username !== 'string' ||
-      !username.trim()
-    ) {
-      this.logger.warn(
-        `Missing username | socket=${client.id}`,
-      );
+    if (typeof username !== 'string' || !username.trim()) {
+      this.logger.warn(`Missing username | socket=${client.id}`);
 
       return null;
     }
@@ -99,59 +44,32 @@ export class EventsService {
     return {
       id,
       username,
-      profilePicture:
-        typeof profilePicture === 'string'
-          ? profilePicture
-          : undefined,
-      avatarId:
-        typeof avatarId === 'string'
-          ? avatarId
-          : undefined,
+      avatar: typeof avatar === 'string' ? avatar : undefined,
+      avatarId: typeof avatarId === 'string' ? avatarId : undefined,
     };
   }
 
-  /**
-   * Register connected socket in Redis.
-   */
-  async registerSocket(
-    client: Socket,
-    user: SocketUser,
-  ): Promise<void> {
-    await this.redisService.client.hset(
-      this.socketKey,
-      user.id,
-      client.id,
-    );
+  // Register connected socket in Redis.
+  async registerSocket(client: Socket, user: SocketUser): Promise<void> {
+    await this.redisService.client.hset(this.socketKey, user.id, client.id);
 
     this.logger.log(
       `Redis socket registered | user=${user.id} socket=${client.id}`,
     );
   }
 
-  /**
-   * Remove socket from Redis.
-   *
-   * Important:
-   * We first check whether Redis currently points
-   * this user to THIS socket.
-   *
-   * This prevents an old socket from deleting
-   * a newer socket belonging to the same user.
-   */
-  async unregisterSocket(
-    client: Socket,
-  ): Promise<void> {
+  // Remove socket from Redis.
+  async unregisterSocket(client: Socket): Promise<void> {
     const user = this.extractUserFromSocket(client);
 
     if (!user) {
       return;
     }
 
-    const currentSocketId =
-      await this.redisService.client.hget(
-        this.socketKey,
-        user.id,
-      );
+    const currentSocketId = await this.redisService.client.hget(
+      this.socketKey,
+      user.id,
+    );
 
     if (currentSocketId !== client.id) {
       this.logger.debug(
@@ -161,55 +79,36 @@ export class EventsService {
       return;
     }
 
-    await this.redisService.client.hdel(
-      this.socketKey,
-      user.id,
-    );
+    await this.redisService.client.hdel(this.socketKey, user.id);
 
     this.logger.log(
       `Redis socket removed | user=${user.id} socket=${client.id}`,
     );
   }
 
-  /**
-   * Get socket ID by user ID.
-   */
-  async getSocketIdByUserId(
-    userId: string,
-  ): Promise<string | null> {
-    if (
-      typeof userId !== 'string' ||
-      !userId.trim()
-    ) {
+  // Get socket ID by user ID.
+  async getSocketIdByUserId(userId: string): Promise<string | null> {
+    if (typeof userId !== 'string' || !userId.trim()) {
       return null;
     }
 
-    const socketId =
-      await this.redisService.client.hget(
-        this.socketKey,
-        userId,
-      );
+    const socketId = await this.redisService.client.hget(
+      this.socketKey,
+      userId,
+    );
 
     return socketId ?? null;
   }
 
-  /**
-   * Get multiple socket IDs.
-   */
-  async findSocketIdsByUserIds(
-    userIds: string[],
-  ): Promise<string[]> {
+  // Get multiple socket IDs.
+  async findSocketIdsByUserIds(userIds: string[]): Promise<string[]> {
     if (!userIds?.length) {
       return [];
     }
 
     const uniqueUserIds = [
       ...new Set(
-        userIds.filter(
-          (id) =>
-            typeof id === 'string' &&
-            id.trim().length > 0,
-        ),
+        userIds.filter((id) => typeof id === 'string' && id.trim().length > 0),
       ),
     ];
 
@@ -217,26 +116,19 @@ export class EventsService {
       return [];
     }
 
-    const socketIds =
-      await Promise.all(
-        uniqueUserIds.map((userId) =>
-          this.redisService.client.hget(
-            this.socketKey,
-            userId,
-          ),
-        ),
-      );
+    const socketIds = await Promise.all(
+      uniqueUserIds.map((userId) =>
+        this.redisService.client.hget(this.socketKey, userId),
+      ),
+    );
 
     return socketIds.filter(
       (socketId): socketId is string =>
-        typeof socketId === 'string' &&
-        socketId.length > 0,
+        typeof socketId === 'string' && socketId.length > 0,
     );
   }
 
-  /**
-   * Send message to selected users.
-   */
+  // Send message to selected users.
   async sendMessageToUsers(
     userIds: string[],
     data: {
@@ -245,37 +137,24 @@ export class EventsService {
     },
   ): Promise<void> {
     if (!this.server) {
-      this.logger.warn(
-        'Socket.IO server is not initialized',
-      );
+      this.logger.warn('Socket.IO server is not initialized');
 
       return;
     }
 
-    const socketIds =
-      await this.findSocketIdsByUserIds(
-        userIds,
-      );
+    const socketIds = await this.findSocketIdsByUserIds(userIds);
 
     if (!socketIds.length) {
-      this.logger.debug(
-        `No online users found for message`,
-      );
+      this.logger.debug(`No online users found for message`);
 
       return;
     }
 
-    this.server
-      .to(socketIds)
-      .emit('message-activity', {
-        message: data.message,
-        senderSocketId:
-          data.senderSocketId,
-      });
+    this.server.to(socketIds).emit('message-activity', {
+      message: data.message,
+      senderSocketId: data.senderSocketId,
+    });
 
-    this.logger.debug(
-      `Message sent to ${socketIds.length} socket(s)`,
-    );
+    this.logger.debug(`Message sent to ${socketIds.length} socket(s)`);
   }
-
 }

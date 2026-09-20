@@ -19,7 +19,7 @@ import { PlayerGameStateService } from './services/player.game.state.service';
     QuizBattleQuestionService,
     QuizBattleRankingService,
     PlayerGameStateService,
-    EventsService
+    EventsService,
   ],
 })
-export class QuizBattleServiceModule { }
+export class QuizBattleServiceModule {}

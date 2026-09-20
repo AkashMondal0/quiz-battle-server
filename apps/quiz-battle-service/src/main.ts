@@ -1,7 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-
 import { QuizBattleServiceModule } from './quiz-battle-service.module';
-
 import { RedisIoAdapter } from './events/RedisIoAdapter';
 import { Logger } from '@nestjs/common/services';
 

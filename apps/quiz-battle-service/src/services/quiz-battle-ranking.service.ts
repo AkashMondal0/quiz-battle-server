@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-
 import {
   RankingUser,
   RoomRanking,
@@ -8,106 +7,59 @@ import {
 
 @Injectable()
 export class QuizBattleRankingService {
-  updateRanking(
-    session: RoomSession,
-  ): void {
-    const users =
-      [...session.users.values()]
-        .filter(
-          user =>
-            user.status !== 'LEFT',
-        )
-        .sort(
-          (a, b) => {
-            if (
-              b.score !== a.score
-            ) {
-              return (
-                b.score - a.score
-              );
-            }
+  updateRanking(session: RoomSession): void {
+    const users = [...session.users.values()]
+      .filter((user) => user.status !== 'LEFT')
+      .sort((a, b) => {
+        if (b.score !== a.score) {
+          return b.score - a.score;
+        }
 
-            if (
-              b.correctAnswers !==
-              a.correctAnswers
-            ) {
-              return (
-                b.correctAnswers -
-                a.correctAnswers
-              );
-            }
+        if (b.correctAnswers !== a.correctAnswers) {
+          return b.correctAnswers - a.correctAnswers;
+        }
 
-            if (
-              b.answeredQuestions !==
-              a.answeredQuestions
-            ) {
-              return (
-                b.answeredQuestions -
-                a.answeredQuestions
-              );
-            }
+        if (b.answeredQuestions !== a.answeredQuestions) {
+          return b.answeredQuestions - a.answeredQuestions;
+        }
 
-            return (
-              a.joinedAt -
-              b.joinedAt
-            );
-          },
-        );
+        return a.joinedAt - b.joinedAt;
+      });
 
-    const rankings =
-      users.map(
-        (
-          user,
-          index,
-        ): RankingUser => {
-          user.rank =
-            index + 1;
+    const rankings = users.map((user, index): RankingUser => {
+      user.rank = index + 1;
 
-          return {
-            userId:
-              user.userId,
+      return {
+        userId: user.userId,
 
-            username:
-              user.username,
+        username: user.username,
 
-            avatar:
-              user.profilePicture,
+        avatar: user.avatar,
 
-            avatarId:
-              user.avatarId,
+        avatarId: user.avatarId,
 
-            score:
-              user.score,
+        score: user.score,
 
-            correctAnswers:
-              user.correctAnswers,
+        correctAnswers: user.correctAnswers,
 
-            answeredQuestions:
-              user.answeredQuestions,
+        answeredQuestions: user.answeredQuestions,
 
-            rank:
-              user.rank,
+        rank: user.rank,
 
-            status:
-              user.status,
-          };
-        },
-      );
+        status: user.status,
+      };
+    });
 
     session.ranking = {
-      roomId:
-        session.room.roomId,
+      roomId: session.room.roomId,
 
       rankings,
 
-      updatedAt:
-        Date.now(),
+      updatedAt: Date.now(),
     };
   }
 
-  getRanking(
-    session: RoomSession,
-  ): RoomRanking {
+  getRanking(session: RoomSession): RoomRanking {
     return session.ranking;
   }
 }

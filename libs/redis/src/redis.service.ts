@@ -1,11 +1,12 @@
 import { ConfigService } from '@app/config';
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 
 import Redis from 'ioredis';
 
 @Injectable()
 export class RedisService implements OnModuleDestroy {
   readonly client: Redis;
+  private readonly logger = new Logger(RedisService.name);
 
   constructor(private readonly configService: ConfigService) {
     const redisUrl = this.configService.getEnv('REDIS_URL');
@@ -20,7 +21,7 @@ export class RedisService implements OnModuleDestroy {
   async onModuleInit() {
     await this.client.config('SET', 'notify-keyspace-events', 'Ex');
 
-    console.log('Redis key expiration notifications enabled');
+    this.logger.log('Redis key expiration notifications enabled');
   }
 
   async onModuleDestroy() {

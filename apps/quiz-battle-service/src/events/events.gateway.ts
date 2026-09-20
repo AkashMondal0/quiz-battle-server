@@ -5,11 +5,8 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
-
 import { Logger, UsePipes, ValidationPipe } from '@nestjs/common';
-
 import { Server, Socket } from 'socket.io';
-
 import { EventsService } from './events.service';
 import { QuizBattleService } from '../quiz-battle-service.service';
 
@@ -155,7 +152,7 @@ export class EventsGateway {
           host: {
             userId: user.id as string,
             username: user.username as string,
-            profilePicture: user.profilePicture as string | null,
+            avatar: user.avatar as string | null,
             avatarId: user.avatarId as string | null,
           },
           numberOfQuestions: data.questionCount,
@@ -194,7 +191,7 @@ export class EventsGateway {
       {
         userId: user?.id as string,
         username: user?.username as string,
-        profilePicture: user?.profilePicture as string | null,
+        avatar: user?.avatar as string | null,
         avatarId: user?.avatarId as string | null,
       },
       async (state) => {

@@ -1,26 +1,8 @@
-import {
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
-
-import {
-  RoomQuestion,
-  RoomSession,
-} from '../interface/room-session.interface';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { RoomQuestion, RoomSession } from '../interface/room-session.interface';
 
 @Injectable()
 export class QuizBattleQuestionService {
-  /**
-   * Demo questions.
-   *
-   * In production:
-   *
-   * PostgreSQL / Drizzle
-   *        ↓
-   * QuestionRepository
-   *        ↓
-   * this service
-   */
   private readonly questionBank: RoomQuestion[] = [
     {
       id: 'q1',
@@ -35,7 +17,7 @@ export class QuizBattleQuestionService {
       topic: 'Geography',
       difficulty: 'EASY',
       timeLimitSeconds: 15,
-      points: 10
+      points: 10,
     },
 
     {
@@ -183,57 +165,30 @@ export class QuizBattleQuestionService {
     },
   ];
 
-  async loadQuestions(
-    numberOfQuestions: number = 5,
-  ): Promise<RoomQuestion[]> {
-
+  async loadQuestions(numberOfQuestions: number = 5): Promise<RoomQuestion[]> {
     if (this.questionBank.length === 0) {
-      throw new NotFoundException(
-        'No questions available',
-      );
+      throw new NotFoundException('No questions available');
     }
 
-    const shuffled =
-      [...this.questionBank].sort(
-        () => Math.random() - 0.5,
-      );
+    const shuffled = [...this.questionBank].sort(() => Math.random() - 0.5);
 
-    const questions =
-      shuffled.slice(
-        0,
-        Math.min(
-          numberOfQuestions,
-          shuffled.length,
-        ),
-      );
-
-    /**
-     * Adjust question time according
-     * to the room if needed.
-     *
-     * Here the question bank controls
-     * the time.
-     */
-    return questions.map(
-      question => ({
-        ...question,
-
-        options: question.options
-          ? question.options.map(option => ({ ...option }))
-          : [],
-      }),
+    const questions = shuffled.slice(
+      0,
+      Math.min(numberOfQuestions, shuffled.length),
     );
+
+    return questions.map((question) => ({
+      ...question,
+
+      options: question.options
+        ? question.options.map((option) => ({ ...option }))
+        : [],
+    }));
   }
 
-  getQuestion(
-    session: RoomSession,
-    questionId: string,
-  ): RoomQuestion | null {
+  getQuestion(session: RoomSession, questionId: string): RoomQuestion | null {
     return (
-      session.questions.find(
-        question =>
-          question.id === questionId,
-      ) ?? null
+      session.questions.find((question) => question.id === questionId) ?? null
     );
   }
 }

@@ -8,10 +8,6 @@ export class PlayerGameStateService {
 
   constructor(private readonly redisService: RedisService) {}
 
-  /**
-   * Put a player into a game.
-   * userId -> roomId
-   */
   async enterGame(userId: string, roomId: string): Promise<boolean> {
     const existingRoomId = await this.getRoomId(userId);
 
@@ -29,16 +25,6 @@ export class PlayerGameStateService {
     return true;
   }
 
-  /**
-   * Start a game for a room.
-   *
-   * Sets an expiration marker key that Redis will emit a keyspace
-   * notification for when it expires. The subscriber in QuizBattleService
-   * listens for `__keyevent@0__:expired` and finishes the room.
-   *
-   * Uses SET NX so multiple players calling startGame for the same room
-   * do NOT reset the timer.
-   */
   async startGame(
     roomId: string,
     gameDuration: number = 1000 * 60 * 10,
@@ -56,40 +42,24 @@ export class PlayerGameStateService {
     return result === 'OK';
   }
 
-  /**
-   * Get the room where the player is currently playing.
-   * Returns null if player is not in any game.
-   */
   async getRoomId(userId: string): Promise<string | null> {
     return this.redisService.client.hget(this.KEY, userId);
   }
 
-  /**
-   * Check whether the player is currently in a game.
-   */
   async isInGame(userId: string): Promise<boolean> {
     const roomId = await this.getRoomId(userId);
     return roomId !== null;
   }
 
-  /**
-   * Remove player from their current game.
-   */
   async leaveGame(userId: string): Promise<boolean> {
     const removed = await this.redisService.client.hdel(this.KEY, userId);
     return removed === 1;
   }
 
-  /**
-   * Get all players currently in games.
-   */
   async getAllPlayers(): Promise<Record<string, string>> {
     return this.redisService.client.hgetall(this.KEY);
   }
 
-  /**
-   * Get all players inside a specific room.
-   */
   async getPlayersInRoom(roomId: string): Promise<string[]> {
     const players = await this.getAllPlayers();
     return Object.entries(players)
