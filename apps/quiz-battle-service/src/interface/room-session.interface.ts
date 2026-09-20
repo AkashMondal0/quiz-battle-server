@@ -3,43 +3,56 @@ export type RoomStatus =
 
 export type PlayerStatus = 'CONNECTED' | 'DISCONNECTED' | 'LEFT';
 
-export interface RoomQuestion {
-  id?: string | null;
-  index?: number | null;
-  type?: string | null;
-  difficulty?: string | null;
-  topic?: string | null;
-  question?: string | null;
-  media?: string | null;
-  options?: QuestionOptionDto[] | null;
-  correctOptionId?: string | null;
-  points?: number | null;
-  timeLimitSeconds?: number | null;
-  status?: string | null;
-  startedAt?: number | null;
-  endsAt?: number | null;
-  explanation?: string | null;
-  stats?: QuestionStatsDto | null;
-}
-
 export interface QuestionOptionDto {
-  id?: string | null;
-  text?: string | null;
+  id: string;
+  text: string;
 }
 
 export interface QuestionStatsDto {
-  totalAnswered?: number | null;
-  correctCount?: number | null;
-  optionDistribution?: Record<string, number> | null;
+  totalAnswered?: number;
+  correctCount?: number;
+  optionDistribution?: Record<string, number>;
+}
+
+export interface RoomQuestion {
+  id: string;
+
+  index: number;
+
+  type: string;
+
+  difficulty: string;
+
+  topic: string;
+
+  question: string;
+
+  media?: string | null;
+
+  options: QuestionOptionDto[];
+
+  correctOptionId: string;
+
+  points: number;
+
+  timeLimitSeconds: number;
+
+  status?: string;
+
+  startedAt?: number;
+
+  endsAt?: number;
+
+  explanation?: string;
+
+  stats?: QuestionStatsDto;
 }
 
 export interface RoomSessionUser {
   userId: string;
-
   username: string;
 
   avatar?: string | null;
-
   avatarId?: string | null;
 
   status: PlayerStatus;
@@ -47,7 +60,6 @@ export interface RoomSessionUser {
   ready: boolean;
 
   joinedAt: number;
-
   lastSeenAt: number;
 
   disconnectedAt?: number;
@@ -55,9 +67,7 @@ export interface RoomSessionUser {
   score: number;
 
   correctAnswers: number;
-
   incorrectAnswers: number;
-
   answeredQuestions: number;
 
   rank: number;
@@ -71,13 +81,11 @@ export interface RoomSessionUser {
 
 export interface RoomSessionDetails {
   roomId: string;
-
   roomCode: string;
 
   hostId: string;
 
   topic: string;
-
   prompt: string;
 
   aiId: string;
@@ -101,11 +109,9 @@ export interface RoomSessionDetails {
   currentQuestionId?: string;
 
   questionStartedAt?: number;
-
   questionEndsAt?: number;
 
   matchStartedAt?: number;
-
   finishedAt?: number;
 
   createdAt: number;
@@ -117,7 +123,6 @@ export interface RankingUser {
   username: string;
 
   avatar?: string | null;
-
   avatarId?: string | null;
 
   score: number;
@@ -141,9 +146,13 @@ export interface RoomRanking {
 
 export interface RoomSession {
   room: RoomSessionDetails;
+
   users: Map<string, RoomSessionUser>;
+
   ranking: RoomRanking;
+
   questions: RoomQuestion[];
+
   timer?: NodeJS.Timeout;
 }
 

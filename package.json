@@ -32,6 +32,7 @@
     "app:quiz-battle": "nest start --watch quiz-battle-service"
   },
   "dependencies": {
+    "@google/genai": "^2.23.0",
     "@nestjs/bullmq": "^11.0.3",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",

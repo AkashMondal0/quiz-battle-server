@@ -346,6 +346,24 @@ export class QuizBattleService {
         allQuestionsAnswered: false,
       };
 
+      const questions = await this.questionService.generateQuestions({
+        topic: room.topic,
+
+        difficulty: room.difficulty,
+
+        numberOfQuestions: room.numberOfQuestions,
+
+        prompt: room.prompt,
+
+        mode: room.mode,
+      });
+
+      if(!questions.length) {
+        this.logger.warn('No questions generated for the room');
+        onError?.('No questions available for the selected topic and difficulty');
+        return;
+      }
+
       const session: RoomSession = {
         room,
         users: new Map([[host.userId, hostUser]]),
@@ -354,7 +372,7 @@ export class QuizBattleService {
           rankings: [],
           updatedAt: now,
         },
-        questions: await this.questionService.loadQuestions(10),
+        questions: questions,
       };
 
       this.rankingService.updateRanking(session);
@@ -579,17 +597,14 @@ export class QuizBattleService {
         return;
       }
 
-      const questions = await this.questionService.loadQuestions(
-        session.room.numberOfQuestions,
-      );
 
-      if (!questions.length) {
+      if (!session.questions.length) {
         this.logger.warn('No questions available');
         onError?.('No questions available');
         return;
       }
 
-      session.questions = questions;
+      session.questions = session.questions;
       session.room.status = 'PLAYING';
       session.room.currentQuestionIndex = -1;
       session.room.matchStartedAt = Date.now();
