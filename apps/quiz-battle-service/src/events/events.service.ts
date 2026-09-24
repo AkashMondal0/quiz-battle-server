@@ -157,4 +157,38 @@ export class EventsService {
 
     this.logger.debug(`Message sent to ${socketIds.length} socket(s)`);
   }
+
+  /**
+   * Generic broadcaster used by services (like QuizBattleService) that need
+   * to push events to specific users from contexts that have no socket
+   * handler to reply through - e.g. a Redis keyspace-expiry callback, or a
+   * setTimeout-driven question timer. Without this, anything triggered
+   * outside of an incoming gateway message had no way to reach clients at
+   * all.
+   */
+  async emitToUsers(
+    userIds: string[],
+    event: string,
+    payload: unknown,
+  ): Promise<void> {
+    if (!this.server) {
+      this.logger.warn('Socket.IO server is not initialized');
+      return;
+    }
+
+    const socketIds = await this.findSocketIdsByUserIds(userIds);
+
+    if (!socketIds.length) {
+      this.logger.debug(`No online users found for event "${event}"`);
+      return;
+    }
+
+    this.server.to(socketIds).emit(event, payload);
+  }
+
+  generateRequestId(): string {
+    const requestId = `req-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+
+    return requestId;
+  }
 }

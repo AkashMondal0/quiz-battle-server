@@ -1,19 +1,27 @@
 services:
+  quiz-battle-service:
+    image: akashmondal0/quiz-battle-service:1.0.0
 
-  rabbitmq:
-    image: rabbitmq:4-management
-    container_name: event-finder-rabbitmq
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: quiz-battle-service
+
+    restart: unless-stopped
+
+    env_file:
+      - .env
 
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "5000:5000"
 
     environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
+      NODE_ENV: production
 
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - quiz-network
 
-volumes:
-  rabbitmq_data:
+networks:
+  quiz-network:
+    driver: bridge

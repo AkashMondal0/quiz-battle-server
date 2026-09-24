@@ -1,15 +1,66 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	"use strict";
-/******/ 	var __webpack_modules__ = ([
-/* 0 */,
-/* 1 */
-/***/ ((module) => {
+/******/ 	var __webpack_modules__ = ({
 
-module.exports = require("@nestjs/core");
+/***/ "./apps/quiz-battle-service/src/events/RedisIoAdapter.ts"
+/*!***************************************************************!*\
+  !*** ./apps/quiz-battle-service/src/events/RedisIoAdapter.ts ***!
+  \***************************************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
 
-/***/ }),
-/* 2 */
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.RedisIoAdapter = void 0;
+const platform_socket_io_1 = __webpack_require__(/*! @nestjs/platform-socket.io */ "@nestjs/platform-socket.io");
+const redis_adapter_1 = __webpack_require__(/*! @socket.io/redis-adapter */ "@socket.io/redis-adapter");
+const redis_1 = __webpack_require__(/*! redis */ "redis");
+const common_1 = __webpack_require__(/*! @nestjs/common */ "@nestjs/common");
+class RedisIoAdapter extends platform_socket_io_1.IoAdapter {
+    logger = new common_1.Logger(RedisIoAdapter.name);
+    adapterConstructor;
+    pubClient;
+    subClient;
+    async connectToRedis() {
+        const redisUrl = process.env.REDIS_URL;
+        if (!redisUrl) {
+            throw new Error('REDIS_URL is not defined');
+        }
+        this.pubClient = (0, redis_1.createClient)({
+            url: redisUrl,
+        });
+        this.subClient = this.pubClient.duplicate();
+        this.pubClient.on('error', (error) => {
+            this.logger.error('[Redis Pub] Error:', error);
+        });
+        this.subClient.on('error', (error) => {
+            this.logger.error('[Redis Sub] Error:', error);
+        });
+        await Promise.all([this.pubClient.connect(), this.subClient.connect()]);
+        this.adapterConstructor = (0, redis_adapter_1.createAdapter)(this.pubClient, this.subClient);
+        this.logger.log('Redis Socket.IO adapter connected');
+    }
+    createIOServer(port, options) {
+        const server = super.createIOServer(port, options);
+        if (!this.adapterConstructor) {
+            throw new Error('Redis adapter is not initialized');
+        }
+        server.adapter(this.adapterConstructor);
+        return server;
+    }
+    async close() {
+        await Promise.all([this.pubClient?.quit(), this.subClient?.quit()]);
+    }
+}
+exports.RedisIoAdapter = RedisIoAdapter;
+
+
+/***/ },
+
+/***/ "./apps/quiz-battle-service/src/events/events.gateway.ts"
+/*!***************************************************************!*\
+  !*** ./apps/quiz-battle-service/src/events/events.gateway.ts ***!
+  \***************************************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
 
 
 var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
@@ -18,47 +69,625 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.QuizBattleServiceModule = void 0;
-const common_1 = __webpack_require__(3);
-const quiz_battle_service_controller_1 = __webpack_require__(4);
-const quiz_battle_service_service_1 = __webpack_require__(5);
-const config_1 = __webpack_require__(9);
-const redis_1 = __webpack_require__(6);
-const events_gateway_1 = __webpack_require__(22);
-const quiz_battle_question_service_1 = __webpack_require__(18);
-const quiz_battle_ranking_service_1 = __webpack_require__(20);
-const events_service_1 = __webpack_require__(25);
-const player_game_state_service_1 = __webpack_require__(21);
-let QuizBattleServiceModule = class QuizBattleServiceModule {
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
-exports.QuizBattleServiceModule = QuizBattleServiceModule;
-exports.QuizBattleServiceModule = QuizBattleServiceModule = __decorate([
-    (0, common_1.Module)({
-        imports: [config_1.ConfigModule],
-        controllers: [quiz_battle_service_controller_1.QuizBattleServiceController],
-        providers: [
-            quiz_battle_service_service_1.QuizBattleService,
-            redis_1.RedisService,
-            events_gateway_1.EventsGateway,
-            quiz_battle_question_service_1.QuizBattleQuestionService,
-            quiz_battle_ranking_service_1.QuizBattleRankingService,
-            player_game_state_service_1.PlayerGameStateService,
-            events_service_1.EventsService,
-        ],
-    })
-], QuizBattleServiceModule);
+var __param = (this && this.__param) || function (paramIndex, decorator) {
+    return function (target, key) { decorator(target, key, paramIndex); }
+};
+var EventsGateway_1;
+var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.EventsGateway = void 0;
+const websockets_1 = __webpack_require__(/*! @nestjs/websockets */ "@nestjs/websockets");
+const common_1 = __webpack_require__(/*! @nestjs/common */ "@nestjs/common");
+const socket_io_1 = __webpack_require__(/*! socket.io */ "socket.io");
+const events_service_1 = __webpack_require__(/*! ./events.service */ "./apps/quiz-battle-service/src/events/events.service.ts");
+const quiz_battle_service_service_1 = __webpack_require__(/*! ../quiz-battle-service.service */ "./apps/quiz-battle-service/src/quiz-battle-service.service.ts");
+const battle_dto_1 = __webpack_require__(/*! ../interface/battle.dto */ "./apps/quiz-battle-service/src/interface/battle.dto.ts");
+let EventsGateway = EventsGateway_1 = class EventsGateway {
+    eventsService;
+    quizBattleService;
+    logger = new common_1.Logger(EventsGateway_1.name);
+    server;
+    constructor(eventsService, quizBattleService) {
+        this.eventsService = eventsService;
+        this.quizBattleService = quizBattleService;
+    }
+    afterInit(server) {
+        this.eventsService.setSocket(server);
+        const rootServer = server.server ?? server;
+        const engine = rootServer?.engine;
+        if (engine?.on) {
+            engine.on('connection_error', (err) => {
+                this.logger.warn(`WebSocket connection error | code=${err?.code} message=${err?.message} context=${JSON.stringify(err?.context ?? {})}`);
+            });
+        }
+        else {
+            this.logger.warn('Could not attach engine.io connection_error listener (engine not found on server instance)');
+        }
+        this.logger.log('Socket.IO server initialized');
+    }
+    async handleError(message, client) {
+        this.server.to(client.id).emit('battle:error', {
+            success: false,
+            message: message,
+        });
+    }
+    async handleConnection(client) {
+        this.logger.log(`Client connected: ${client.id}`);
+        client.on('error', (err) => {
+            this.logger.warn(`Socket error | socket=${client.id} | ${err instanceof Error ? err.message : String(err)}`);
+        });
+        try {
+            const user = this.eventsService.extractUserFromSocket(client);
+            if (!user) {
+                await this.handleError(`Invalid user information for client: ${client.id}`, client);
+                client.disconnect(true);
+                return;
+            }
+            await this.eventsService.registerSocket(client, user);
+            client.emit('connected', {
+                success: true,
+                socketId: client.id,
+                userId: user.id,
+            });
+            await this.quizBattleService.checkReconnectGame(user.id, Date.now(), (state) => {
+                client.emit('battle:reconnect-response', state);
+            }, (errorMessage) => {
+                this.handleError(errorMessage, client);
+            });
+            this.logger.log(`User connected | ${user.username} | ${user.id} | ${client.id}`);
+        }
+        catch (error) {
+            this.logger.error(`Connection failed | ${client.id}`, error instanceof Error ? error.stack : String(error));
+            client.disconnect(true);
+        }
+    }
+    async handleDisconnect(client) {
+        this.logger.log(`Client disconnected: ${client.id}`);
+        const user = this.eventsService.extractUserFromSocket(client);
+        await this.eventsService.unregisterSocket(client);
+        if (!user)
+            return;
+        await this.quizBattleService.handleSocketDisconnect(user.id);
+    }
+    handleCreateRoom(client, ack, data) {
+        const user = this.eventsService.extractUserFromSocket(client);
+        if (!user) {
+            this.logger.warn(`Invalid user information for client: ${client.id}`);
+            ack({
+                success: false,
+                status: 'NOT_FOUND',
+                message: 'An error occurred while creating the room',
+                requestId: data.requestId,
+                serverTime: Date.now(),
+            });
+            return;
+        }
+        this.quizBattleService.createRoom({
+            aiId: data.aiModelId,
+            mode: data.gameMode,
+            difficulty: data.difficulty,
+            visibility: data.isPrivate ? 'private' : 'public',
+            maxPlayers: data.playerCount,
+            topic: data.topic,
+            prompt: '',
+            host: {
+                userId: user.id,
+                username: user.username,
+                avatar: user.avatar,
+                avatarId: user.avatarId,
+            },
+            numberOfQuestions: data.questionCount,
+            totalTimeSeconds: data.secondsPerQuestion * data.questionCount,
+        }, (state) => {
+            client.emit('battle:lobby', state);
+            ack({
+                success: true,
+                status: 'CREATED',
+                message: 'Room created successfully',
+                requestId: data.requestId,
+                serverTime: Date.now(),
+            });
+        }, (errorMessage) => {
+            ack({
+                success: false,
+                status: 'SERVER_ERROR',
+                message: errorMessage,
+                requestId: data.requestId,
+                serverTime: Date.now(),
+            });
+        });
+    }
+    handleJoinRoom(client, ack, data) {
+        const user = this.eventsService.extractUserFromSocket(client);
+        const requestId = data.requestId ?? this.eventsService.generateRequestId();
+        if (!user) {
+            this.logger.warn(`Invalid user information for client: ${client.id}`);
+            ack({
+                success: false,
+                status: 'NOT_FOUND',
+                message: 'An error occurred while joining the room',
+                requestId: requestId,
+                serverTime: Date.now(),
+            });
+            return;
+        }
+        this.quizBattleService.joinRoom(data.roomId, {
+            userId: user?.id,
+            username: user?.username,
+            avatar: user?.avatar,
+            avatarId: user?.avatarId,
+        }, async (state) => {
+            const socketIds = (await this.eventsService.findSocketIdsByUserIds(state.players.map((p) => p.userId))).filter((id) => id !== user.id);
+            this.server.to(socketIds).emit('battle:lobby', state);
+            client.emit('battle:joined-response', state);
+            ack({
+                success: true,
+                status: 'OK',
+                message: 'Joined room successfully',
+                requestId: requestId,
+                serverTime: Date.now(),
+            });
+        }, (errorMessage) => {
+            ack({
+                success: false,
+                status: 'SERVER_ERROR',
+                message: errorMessage,
+                requestId: requestId,
+                serverTime: Date.now(),
+            });
+        });
+    }
+    handleReady(client, data) {
+        const user = this.eventsService.extractUserFromSocket(client);
+        if (!user) {
+            this.logger.warn(`Invalid user information for client: ${client.id}`);
+            this.handleError(`An error occurred while setting ready status`, client);
+            return;
+        }
+        this.quizBattleService.setPlayerReady({
+            roomId: data.roomId,
+            userId: user.id,
+            ready: data.ready,
+        }, async (state) => {
+            const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map((p) => p.userId));
+            this.server.to(socketIds).emit('battle:lobby-updated', state);
+        }, (errorMessage) => {
+            this.handleError(errorMessage, client);
+        });
+    }
+    handleStart(client, data) {
+        const user = this.eventsService.extractUserFromSocket(client);
+        if (!user) {
+            this.logger.warn(`Invalid user information for client: ${client.id}`);
+            this.handleError(`An error occurred while starting the match`, client);
+            return;
+        }
+        this.quizBattleService.startMatch({
+            roomId: data.roomId,
+            userId: user.id,
+        }, async (state) => {
+            const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map((p) => p.userId));
+            this.server.to(socketIds).emit('battle:game-start', state);
+        }, (errorMessage) => {
+            this.handleError(errorMessage, client);
+        });
+    }
+    handleLeave(client, data) {
+        const user = this.eventsService.extractUserFromSocket(client);
+        if (!user) {
+            this.logger.warn(`Invalid user information for client: ${client.id}`);
+            this.handleError(`An error occurred while leaving the match`, client);
+            return;
+        }
+        this.quizBattleService.leaveRoom({
+            roomId: data.roomId,
+            userId: user.id,
+        }, async (state) => {
+            const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map((player) => player.userId));
+            this.server.to(socketIds).emit('battle:player-left', state);
+        }, (errorMessage) => {
+            this.handleError(errorMessage, client);
+        });
+    }
+    handleReconnect(client) {
+        const user = this.eventsService.extractUserFromSocket(client);
+        if (!user) {
+            this.logger.warn(`Invalid user information for client: ${client.id}`);
+            this.handleError(`An error occurred while reconnecting`, client);
+            return;
+        }
+        this.quizBattleService.reconnectGame(user.id, Date.now(), (state) => {
+            client.emit('battle:game-start', state);
+        }, (errorMessage) => {
+            this.handleError(errorMessage, client);
+        });
+    }
+    handleAnswer(client, data) {
+        const user = this.eventsService.extractUserFromSocket(client);
+        if (!user) {
+            this.logger.warn(`Invalid user information for client: ${client.id}`);
+            this.handleError(`An error occurred while submitting an answer`, client);
+            return;
+        }
+        this.quizBattleService.answerAttempt({
+            roomId: data.roomId,
+            userId: user.id,
+            qId: data.qId,
+            oId: data.oId,
+        }, async (state) => {
+            const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map((player) => player.userId));
+            this.server.to(socketIds).emit('battle:lobby-updated', state);
+        }, (errorMessage) => {
+            this.handleError(errorMessage, client);
+        });
+    }
+};
+exports.EventsGateway = EventsGateway;
+__decorate([
+    (0, websockets_1.WebSocketServer)(),
+    __metadata("design:type", typeof (_c = typeof socket_io_1.Server !== "undefined" && socket_io_1.Server) === "function" ? _c : Object)
+], EventsGateway.prototype, "server", void 0);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('battle:create'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.Ack)()),
+    __param(2, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [typeof (_d = typeof socket_io_1.Socket !== "undefined" && socket_io_1.Socket) === "function" ? _d : Object, Function, typeof (_e = typeof battle_dto_1.CreateRoomDto !== "undefined" && battle_dto_1.CreateRoomDto) === "function" ? _e : Object]),
+    __metadata("design:returntype", void 0)
+], EventsGateway.prototype, "handleCreateRoom", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('battle:join'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.Ack)()),
+    __param(2, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [typeof (_f = typeof socket_io_1.Socket !== "undefined" && socket_io_1.Socket) === "function" ? _f : Object, Function, typeof (_g = typeof battle_dto_1.JoinRoomDto !== "undefined" && battle_dto_1.JoinRoomDto) === "function" ? _g : Object]),
+    __metadata("design:returntype", void 0)
+], EventsGateway.prototype, "handleJoinRoom", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('battle:ready'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [typeof (_h = typeof socket_io_1.Socket !== "undefined" && socket_io_1.Socket) === "function" ? _h : Object, typeof (_j = typeof battle_dto_1.ReadyDto !== "undefined" && battle_dto_1.ReadyDto) === "function" ? _j : Object]),
+    __metadata("design:returntype", void 0)
+], EventsGateway.prototype, "handleReady", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('battle:game-start'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [typeof (_k = typeof socket_io_1.Socket !== "undefined" && socket_io_1.Socket) === "function" ? _k : Object, typeof (_l = typeof battle_dto_1.RoomIdDto !== "undefined" && battle_dto_1.RoomIdDto) === "function" ? _l : Object]),
+    __metadata("design:returntype", void 0)
+], EventsGateway.prototype, "handleStart", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('battle:leave'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [typeof (_m = typeof socket_io_1.Socket !== "undefined" && socket_io_1.Socket) === "function" ? _m : Object, typeof (_o = typeof battle_dto_1.RoomIdDto !== "undefined" && battle_dto_1.RoomIdDto) === "function" ? _o : Object]),
+    __metadata("design:returntype", void 0)
+], EventsGateway.prototype, "handleLeave", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('battle:reconnect'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [typeof (_p = typeof socket_io_1.Socket !== "undefined" && socket_io_1.Socket) === "function" ? _p : Object]),
+    __metadata("design:returntype", void 0)
+], EventsGateway.prototype, "handleReconnect", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('battle:answer'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [typeof (_q = typeof socket_io_1.Socket !== "undefined" && socket_io_1.Socket) === "function" ? _q : Object, typeof (_r = typeof battle_dto_1.AnswerDto !== "undefined" && battle_dto_1.AnswerDto) === "function" ? _r : Object]),
+    __metadata("design:returntype", void 0)
+], EventsGateway.prototype, "handleAnswer", null);
+exports.EventsGateway = EventsGateway = EventsGateway_1 = __decorate([
+    (0, websockets_1.WebSocketGateway)({
+        namespace: '/event',
+        cors: {
+            origin: true,
+            credentials: true,
+        },
+        transports: ['websocket'],
+        pingInterval: 25000,
+        pingTimeout: 20000,
+        connectTimeout: 15000,
+    }),
+    (0, common_1.UsePipes)(new common_1.ValidationPipe({
+        whitelist: true,
+        transform: true,
+    })),
+    __metadata("design:paramtypes", [typeof (_a = typeof events_service_1.EventsService !== "undefined" && events_service_1.EventsService) === "function" ? _a : Object, typeof (_b = typeof quiz_battle_service_service_1.QuizBattleService !== "undefined" && quiz_battle_service_service_1.QuizBattleService) === "function" ? _b : Object])
+], EventsGateway);
 
 
-/***/ }),
-/* 3 */
-/***/ ((module) => {
+/***/ },
 
-module.exports = require("@nestjs/common");
+/***/ "./apps/quiz-battle-service/src/events/events.service.ts"
+/*!***************************************************************!*\
+  !*** ./apps/quiz-battle-service/src/events/events.service.ts ***!
+  \***************************************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
 
-/***/ }),
-/* 4 */
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+var EventsService_1;
+var _a;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.EventsService = void 0;
+const redis_1 = __webpack_require__(/*! @app/redis */ "./libs/redis/src/index.ts");
+const common_1 = __webpack_require__(/*! @nestjs/common */ "@nestjs/common");
+let EventsService = EventsService_1 = class EventsService {
+    redisService;
+    logger = new common_1.Logger(EventsService_1.name);
+    server;
+    socketKey = 'SOCKET:CLIENTS';
+    constructor(redisService) {
+        this.redisService = redisService;
+    }
+    setSocket(server) {
+        this.server = server;
+        this.logger.log('Socket.IO server registered in EventsService');
+    }
+    extractUserFromSocket(client) {
+        const { id, username, avatar, avatarId } = client.handshake.query;
+        if (typeof id !== 'string' || !id.trim()) {
+            this.logger.warn(`Missing user id | socket=${client.id}`);
+            return null;
+        }
+        if (typeof username !== 'string' || !username.trim()) {
+            this.logger.warn(`Missing username | socket=${client.id}`);
+            return null;
+        }
+        return {
+            id,
+            username,
+            avatar: typeof avatar === 'string' ? avatar : undefined,
+            avatarId: typeof avatarId === 'string' ? avatarId : undefined,
+        };
+    }
+    async registerSocket(client, user) {
+        await this.redisService.client.hset(this.socketKey, user.id, client.id);
+        this.logger.log(`Redis socket registered | user=${user.id} socket=${client.id}`);
+    }
+    async unregisterSocket(client) {
+        const user = this.extractUserFromSocket(client);
+        if (!user) {
+            return;
+        }
+        const currentSocketId = await this.redisService.client.hget(this.socketKey, user.id);
+        if (currentSocketId !== client.id) {
+            this.logger.debug(`Skipping Redis cleanup because socket was replaced | user=${user.id}`);
+            return;
+        }
+        await this.redisService.client.hdel(this.socketKey, user.id);
+        this.logger.log(`Redis socket removed | user=${user.id} socket=${client.id}`);
+    }
+    async getSocketIdByUserId(userId) {
+        if (typeof userId !== 'string' || !userId.trim()) {
+            return null;
+        }
+        const socketId = await this.redisService.client.hget(this.socketKey, userId);
+        return socketId ?? null;
+    }
+    async findSocketIdsByUserIds(userIds) {
+        if (!userIds?.length) {
+            return [];
+        }
+        const uniqueUserIds = [
+            ...new Set(userIds.filter((id) => typeof id === 'string' && id.trim().length > 0)),
+        ];
+        if (!uniqueUserIds.length) {
+            return [];
+        }
+        const socketIds = await Promise.all(uniqueUserIds.map((userId) => this.redisService.client.hget(this.socketKey, userId)));
+        return socketIds.filter((socketId) => typeof socketId === 'string' && socketId.length > 0);
+    }
+    async sendMessageToUsers(userIds, data) {
+        if (!this.server) {
+            this.logger.warn('Socket.IO server is not initialized');
+            return;
+        }
+        const socketIds = await this.findSocketIdsByUserIds(userIds);
+        if (!socketIds.length) {
+            this.logger.debug(`No online users found for message`);
+            return;
+        }
+        this.server.to(socketIds).emit('message-activity', {
+            message: data.message,
+            senderSocketId: data.senderSocketId,
+        });
+        this.logger.debug(`Message sent to ${socketIds.length} socket(s)`);
+    }
+    async emitToUsers(userIds, event, payload) {
+        if (!this.server) {
+            this.logger.warn('Socket.IO server is not initialized');
+            return;
+        }
+        const socketIds = await this.findSocketIdsByUserIds(userIds);
+        if (!socketIds.length) {
+            this.logger.debug(`No online users found for event "${event}"`);
+            return;
+        }
+        this.server.to(socketIds).emit(event, payload);
+    }
+    generateRequestId() {
+        const requestId = `req-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+        return requestId;
+    }
+};
+exports.EventsService = EventsService;
+exports.EventsService = EventsService = EventsService_1 = __decorate([
+    (0, common_1.Injectable)(),
+    __metadata("design:paramtypes", [typeof (_a = typeof redis_1.RedisService !== "undefined" && redis_1.RedisService) === "function" ? _a : Object])
+], EventsService);
+
+
+/***/ },
+
+/***/ "./apps/quiz-battle-service/src/interface/battle.dto.ts"
+/*!**************************************************************!*\
+  !*** ./apps/quiz-battle-service/src/interface/battle.dto.ts ***!
+  \**************************************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.AnswerDto = exports.RoomIdDto = exports.ReadyDto = exports.JoinRoomDto = exports.CreateRoomDto = void 0;
+const class_validator_1 = __webpack_require__(/*! class-validator */ "class-validator");
+class CreateRoomDto {
+    requestId;
+    topic;
+    aiModelId;
+    aiBackendId;
+    gameMode;
+    playerCount;
+    difficulty;
+    questionCount;
+    secondsPerQuestion;
+    isPrivate;
+}
+exports.CreateRoomDto = CreateRoomDto;
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MinLength)(1),
+    __metadata("design:type", String)
+], CreateRoomDto.prototype, "requestId", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MinLength)(1),
+    (0, class_validator_1.MaxLength)(120),
+    __metadata("design:type", String)
+], CreateRoomDto.prototype, "topic", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateRoomDto.prototype, "aiModelId", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateRoomDto.prototype, "aiBackendId", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateRoomDto.prototype, "gameMode", void 0);
+__decorate([
+    (0, class_validator_1.IsInt)(),
+    (0, class_validator_1.Min)(1),
+    (0, class_validator_1.Max)(20),
+    __metadata("design:type", Number)
+], CreateRoomDto.prototype, "playerCount", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], CreateRoomDto.prototype, "difficulty", void 0);
+__decorate([
+    (0, class_validator_1.IsInt)(),
+    (0, class_validator_1.Min)(1),
+    (0, class_validator_1.Max)(50),
+    __metadata("design:type", Number)
+], CreateRoomDto.prototype, "questionCount", void 0);
+__decorate([
+    (0, class_validator_1.IsInt)(),
+    (0, class_validator_1.Min)(5),
+    (0, class_validator_1.Max)(300),
+    __metadata("design:type", Number)
+], CreateRoomDto.prototype, "secondsPerQuestion", void 0);
+__decorate([
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], CreateRoomDto.prototype, "isPrivate", void 0);
+class JoinRoomDto {
+    roomId;
+    requestId;
+}
+exports.JoinRoomDto = JoinRoomDto;
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MinLength)(1),
+    __metadata("design:type", String)
+], JoinRoomDto.prototype, "roomId", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], JoinRoomDto.prototype, "requestId", void 0);
+class ReadyDto {
+    ready;
+    roomId;
+}
+exports.ReadyDto = ReadyDto;
+__decorate([
+    (0, class_validator_1.IsBoolean)(),
+    __metadata("design:type", Boolean)
+], ReadyDto.prototype, "ready", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MinLength)(1),
+    __metadata("design:type", String)
+], ReadyDto.prototype, "roomId", void 0);
+class RoomIdDto {
+    roomId;
+}
+exports.RoomIdDto = RoomIdDto;
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MinLength)(1),
+    __metadata("design:type", String)
+], RoomIdDto.prototype, "roomId", void 0);
+class AnswerDto {
+    roomId;
+    oId;
+    qId;
+}
+exports.AnswerDto = AnswerDto;
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MinLength)(1),
+    __metadata("design:type", String)
+], AnswerDto.prototype, "roomId", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MinLength)(1),
+    __metadata("design:type", String)
+], AnswerDto.prototype, "oId", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MinLength)(1),
+    __metadata("design:type", String)
+], AnswerDto.prototype, "qId", void 0);
+
+
+/***/ },
+
+/***/ "./apps/quiz-battle-service/src/quiz-battle-service.controller.ts"
+/*!************************************************************************!*\
+  !*** ./apps/quiz-battle-service/src/quiz-battle-service.controller.ts ***!
+  \************************************************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
 
 
 var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
@@ -76,8 +705,8 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.QuizBattleServiceController = void 0;
-const common_1 = __webpack_require__(3);
-const quiz_battle_service_service_1 = __webpack_require__(5);
+const common_1 = __webpack_require__(/*! @nestjs/common */ "@nestjs/common");
+const quiz_battle_service_service_1 = __webpack_require__(/*! ./quiz-battle-service.service */ "./apps/quiz-battle-service/src/quiz-battle-service.service.ts");
 let QuizBattleServiceController = class QuizBattleServiceController {
     quizBattleService;
     constructor(quizBattleService) {
@@ -101,9 +730,60 @@ exports.QuizBattleServiceController = QuizBattleServiceController = __decorate([
 ], QuizBattleServiceController);
 
 
-/***/ }),
-/* 5 */
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+/***/ },
+
+/***/ "./apps/quiz-battle-service/src/quiz-battle-service.module.ts"
+/*!********************************************************************!*\
+  !*** ./apps/quiz-battle-service/src/quiz-battle-service.module.ts ***!
+  \********************************************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.QuizBattleServiceModule = void 0;
+const common_1 = __webpack_require__(/*! @nestjs/common */ "@nestjs/common");
+const quiz_battle_service_controller_1 = __webpack_require__(/*! ./quiz-battle-service.controller */ "./apps/quiz-battle-service/src/quiz-battle-service.controller.ts");
+const quiz_battle_service_service_1 = __webpack_require__(/*! ./quiz-battle-service.service */ "./apps/quiz-battle-service/src/quiz-battle-service.service.ts");
+const config_1 = __webpack_require__(/*! @app/config */ "./libs/config/src/index.ts");
+const redis_1 = __webpack_require__(/*! @app/redis */ "./libs/redis/src/index.ts");
+const events_gateway_1 = __webpack_require__(/*! ./events/events.gateway */ "./apps/quiz-battle-service/src/events/events.gateway.ts");
+const quiz_battle_question_service_1 = __webpack_require__(/*! ./services/quiz-battle-question.service */ "./apps/quiz-battle-service/src/services/quiz-battle-question.service.ts");
+const quiz_battle_ranking_service_1 = __webpack_require__(/*! ./services/quiz-battle-ranking.service */ "./apps/quiz-battle-service/src/services/quiz-battle-ranking.service.ts");
+const events_service_1 = __webpack_require__(/*! ./events/events.service */ "./apps/quiz-battle-service/src/events/events.service.ts");
+const player_game_state_service_1 = __webpack_require__(/*! ./services/player.game.state.service */ "./apps/quiz-battle-service/src/services/player.game.state.service.ts");
+let QuizBattleServiceModule = class QuizBattleServiceModule {
+};
+exports.QuizBattleServiceModule = QuizBattleServiceModule;
+exports.QuizBattleServiceModule = QuizBattleServiceModule = __decorate([
+    (0, common_1.Module)({
+        imports: [config_1.ConfigModule],
+        controllers: [quiz_battle_service_controller_1.QuizBattleServiceController],
+        providers: [
+            quiz_battle_service_service_1.QuizBattleService,
+            redis_1.RedisService,
+            events_gateway_1.EventsGateway,
+            quiz_battle_question_service_1.QuizBattleQuestionService,
+            quiz_battle_ranking_service_1.QuizBattleRankingService,
+            player_game_state_service_1.PlayerGameStateService,
+            events_service_1.EventsService,
+        ],
+    })
+], QuizBattleServiceModule);
+
+
+/***/ },
+
+/***/ "./apps/quiz-battle-service/src/quiz-battle-service.service.ts"
+/*!*********************************************************************!*\
+  !*** ./apps/quiz-battle-service/src/quiz-battle-service.service.ts ***!
+  \*********************************************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
 
 
 var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
@@ -116,33 +796,45 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 var QuizBattleService_1;
-var _a, _b, _c, _d;
+var _a, _b, _c, _d, _e;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.QuizBattleService = void 0;
-const common_1 = __webpack_require__(3);
-const redis_1 = __webpack_require__(6);
-const quiz_battle_question_service_1 = __webpack_require__(18);
-const quiz_battle_ranking_service_1 = __webpack_require__(20);
-const player_game_state_service_1 = __webpack_require__(21);
+const common_1 = __webpack_require__(/*! @nestjs/common */ "@nestjs/common");
+const redis_1 = __webpack_require__(/*! @app/redis */ "./libs/redis/src/index.ts");
+const quiz_battle_question_service_1 = __webpack_require__(/*! ./services/quiz-battle-question.service */ "./apps/quiz-battle-service/src/services/quiz-battle-question.service.ts");
+const quiz_battle_ranking_service_1 = __webpack_require__(/*! ./services/quiz-battle-ranking.service */ "./apps/quiz-battle-service/src/services/quiz-battle-ranking.service.ts");
+const player_game_state_service_1 = __webpack_require__(/*! ./services/player.game.state.service */ "./apps/quiz-battle-service/src/services/player.game.state.service.ts");
+const events_service_1 = __webpack_require__(/*! ./events/events.service */ "./apps/quiz-battle-service/src/events/events.service.ts");
 let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
     redisService;
     questionService;
     rankingService;
     playerGameStateService;
+    eventsService;
     logger = new common_1.Logger(QuizBattleService_1.name);
     sessions = new Map();
     reconnectGracePeriod = 10 * 60 * 1000;
-    countdownSeconds = 3;
     subscriber = null;
     disconnectTimers = new Map();
-    constructor(redisService, questionService, rankingService, playerGameStateService) {
+    constructor(redisService, questionService, rankingService, playerGameStateService, eventsService) {
         this.redisService = redisService;
         this.questionService = questionService;
         this.rankingService = rankingService;
         this.playerGameStateService = playerGameStateService;
+        this.eventsService = eventsService;
     }
     async onModuleInit() {
         this.subscriber = this.redisService.client.duplicate();
+        this.subscriber.on('error', (err) => {
+            this.logger.error('Redis subscriber error', err instanceof Error ? err.stack : String(err));
+        });
+        try {
+            await this.redisService.client.config('SET', 'notify-keyspace-events', 'Ex');
+        }
+        catch (error) {
+            this.logger.warn('Could not set notify-keyspace-events on Redis (may be disabled for managed/cluster instances). ' +
+                'Ensure it is configured out of band: CONFIG SET notify-keyspace-events Ex', error instanceof Error ? error.stack : String(error));
+        }
         await this.subscriber.psubscribe('__keyevent@0__:expired');
         this.subscriber.on('pmessage', async (_pattern, _channel, key) => {
             const match = key.match(/^game:room:(.+):expiration$/);
@@ -169,134 +861,109 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
             this.logger.warn(`Expired room not found | room=${roomId}`);
             return;
         }
-        session.room.status = 'FINISHED';
-        session.room.finishedAt = Date.now();
-        session.room.currentQuestionId = undefined;
-        session.room.questionStartedAt = undefined;
-        session.room.questionEndsAt = undefined;
-        if (session.timer) {
-            clearTimeout(session.timer);
-            session.timer = undefined;
+        if (session.room.status === 'FINISHED') {
+            this.sessions.delete(roomId);
+            return;
         }
+        await this.finishMatch(session);
         for (const [key, timer] of this.disconnectTimers.entries()) {
             if (key.startsWith(`${roomId}:`)) {
                 clearTimeout(timer);
                 this.disconnectTimers.delete(key);
             }
         }
-        this.rankingService.updateRanking(session);
-        const players = [...session.users.values()];
-        await Promise.all(players.map((player) => this.playerGameStateService.leaveGame(player.userId)));
-        await this.saveSessionToRedis(session, 5 * 60 * 1000);
         this.sessions.delete(roomId);
         this.logger.debug(`Room finished & cleaned up | room=${roomId}`);
     }
-    async checkReconnectGame(userId, clientTime, socketCallbackWithRoomState, onError) {
+    async handleSocketDisconnect(userId) {
         try {
             const roomId = await this.playerGameStateService.getRoomId(userId);
-            if (!roomId) {
+            if (!roomId)
                 return;
-            }
-            const roomData = await this.getRoom(roomId);
-            if (!roomData) {
-                this.logger.error(`User ${userId} trying to reconnect to a non-existent room ${roomId}`);
-                await this.playerGameStateService.leaveGame(userId);
+            const session = await this.getRoom(roomId);
+            if (!session)
                 return;
-            }
-            if (roomData.room.status === 'FINISHED') {
-                socketCallbackWithRoomState(this.createRoomState(roomData, userId));
+            if (session.room.status === 'FINISHED')
                 return;
-            }
-            const isExpired = await this.isRoomExpired(roomId);
-            if (isExpired) {
-                this.logger.warn(`User ${userId} reconnecting to expired room ${roomId}; finalizing`);
-                roomData.room.status = 'FINISHED';
-                roomData.room.finishedAt = Date.now();
-                if (roomData.timer) {
-                    clearTimeout(roomData.timer);
-                    roomData.timer = undefined;
-                }
-                this.rankingService.updateRanking(roomData);
-                await this.saveSessionToRedis(roomData, 5 * 60 * 1000);
-                await this.playerGameStateService.leaveGame(userId);
-                socketCallbackWithRoomState(this.createRoomState(roomData, userId));
+            const publicUser = await this.disconnectUser(roomId, userId);
+            if (!publicUser)
                 return;
+            const state = this.createRoomState(session);
+            const remainingUserIds = [...session.users.values()]
+                .filter((u) => u.userId !== userId && u.status !== 'LEFT')
+                .map((u) => u.userId);
+            await this.broadcastToRoom(remainingUserIds, 'battle:player-disconnected', state);
+        }
+        catch (error) {
+            this.logger.error(`Error handling socket disconnect | user=${userId}`, error instanceof Error ? error.stack : String(error));
+        }
+    }
+    async checkReconnectGame(userId, _clientTime, socketCallbackWithRoomState, onError) {
+        try {
+            const state = await this.getReconnectState(userId);
+            if (state) {
+                socketCallbackWithRoomState(state);
             }
-            const player = roomData.users.get(userId);
-            if (player?.allQuestionsAnswered) {
-                socketCallbackWithRoomState(this.createRoomState(roomData, userId));
-                return;
-            }
-            if (player) {
-                player.status = 'CONNECTED';
-                player.lastSeenAt = Date.now();
-                player.disconnectedAt = undefined;
-                const timerKey = `${roomId}:${userId}`;
-                const pending = this.disconnectTimers.get(timerKey);
-                if (pending) {
-                    clearTimeout(pending);
-                    this.disconnectTimers.delete(timerKey);
-                }
-                await this.saveSessionToRedis(roomData);
-            }
-            socketCallbackWithRoomState(this.createRoomState(roomData, userId));
-            return;
         }
         catch (error) {
             this.logger.error(`Reconnect check failed | user=${userId}`, error instanceof Error ? error.stack : String(error));
             onError?.('Failed to check reconnect state');
         }
     }
-    async reconnectGame(userId, clientTime, socketCallbackWithRoomState, errorCallback) {
+    async reconnectGame(userId, _clientTime, socketCallbackWithRoomState, errorCallback) {
         try {
             const roomId = await this.playerGameStateService.getRoomId(userId);
             if (!roomId) {
+                errorCallback('User is not part of any game');
                 return;
             }
-            const roomData = await this.getRoom(roomId);
-            if (!roomData) {
-                await this.playerGameStateService.leaveGame(userId);
+            const state = await this.getReconnectState(userId);
+            if (!state) {
                 errorCallback('Room no longer exists');
                 return;
             }
-            if (roomData.room.status === 'FINISHED') {
-                socketCallbackWithRoomState(this.createRoomState(roomData, userId));
-                return;
-            }
-            const isExpired = await this.isRoomExpired(roomId);
-            if (isExpired) {
-                roomData.room.status = 'FINISHED';
-                roomData.room.finishedAt = Date.now();
-                if (roomData.timer) {
-                    clearTimeout(roomData.timer);
-                    roomData.timer = undefined;
-                }
-                this.rankingService.updateRanking(roomData);
-                await this.saveSessionToRedis(roomData, 5 * 60 * 1000);
-                await this.playerGameStateService.leaveGame(userId);
-                socketCallbackWithRoomState(this.createRoomState(roomData, userId));
-                return;
-            }
-            const player = roomData.users.get(userId);
-            if (player) {
-                player.status = 'CONNECTED';
-                player.lastSeenAt = Date.now();
-                player.disconnectedAt = undefined;
-                const timerKey = `${roomId}:${userId}`;
-                const pending = this.disconnectTimers.get(timerKey);
-                if (pending) {
-                    clearTimeout(pending);
-                    this.disconnectTimers.delete(timerKey);
-                }
-                await this.saveSessionToRedis(roomData);
-            }
-            socketCallbackWithRoomState(this.createRoomState(roomData, userId));
-            return;
+            socketCallbackWithRoomState(state);
         }
         catch (error) {
             this.logger.error(`Reconnect failed | user=${userId}`, error instanceof Error ? error.stack : String(error));
             errorCallback('Failed to reconnect');
         }
+    }
+    async getReconnectState(userId) {
+        const roomId = await this.playerGameStateService.getRoomId(userId);
+        if (!roomId)
+            return null;
+        const session = await this.getRoom(roomId);
+        if (!session) {
+            this.logger.error(`User ${userId} trying to reconnect to a non-existent room ${roomId}`);
+            await this.playerGameStateService.leaveGame(userId);
+            return null;
+        }
+        if (session.room.status === 'FINISHED') {
+            return this.createRoomState(session, userId);
+        }
+        if (await this.isRoomExpired(session)) {
+            this.logger.warn(`User ${userId} reconnecting to expired room ${roomId}; finalizing`);
+            await this.finishMatch(session);
+            return this.createRoomState(session, userId);
+        }
+        const player = session.users.get(userId);
+        if (player?.allQuestionsAnswered) {
+            return this.createRoomState(session, userId);
+        }
+        if (player) {
+            player.status = 'CONNECTED';
+            player.lastSeenAt = Date.now();
+            player.disconnectedAt = undefined;
+            const timerKey = `${roomId}:${userId}`;
+            const pending = this.disconnectTimers.get(timerKey);
+            if (pending) {
+                clearTimeout(pending);
+                this.disconnectTimers.delete(timerKey);
+            }
+            await this.saveSessionToRedis(session);
+        }
+        return this.createRoomState(session, userId);
     }
     async createRoom(body, socketCallbackWithRoomState, onError) {
         try {
@@ -341,7 +1008,7 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
             const questions = await this.questionService.generateQuestions({
                 topic: room.topic,
                 difficulty: room.difficulty,
-                numberOfQuestions: room.numberOfQuestions,
+                count: room.numberOfQuestions,
                 prompt: room.prompt,
                 mode: room.mode,
             });
@@ -512,7 +1179,6 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
                 onError?.('No questions available');
                 return;
             }
-            session.questions = session.questions;
             session.room.status = 'PLAYING';
             session.room.currentQuestionIndex = -1;
             session.room.matchStartedAt = Date.now();
@@ -526,6 +1192,7 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
             const durationMs = (session.room.totalTimeSeconds || 600) * 1000;
             await this.playerGameStateService.startGame(roomId, durationMs);
             socketCallbackWithRoomState(this.createRoomState(session, userId));
+            void this.advanceQuestion(roomId);
             return;
         }
         catch (error) {
@@ -533,6 +1200,73 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
             onError?.('Failed to start match');
             return;
         }
+    }
+    getPerQuestionDurationMs(room) {
+        const total = room.totalTimeSeconds || 600;
+        const count = room.numberOfQuestions || 1;
+        const perQuestionSeconds = Math.max(5, Math.floor(total / count));
+        return perQuestionSeconds * 1000;
+    }
+    async advanceQuestion(roomId) {
+        const session = await this.getRoom(roomId);
+        if (!session)
+            return;
+        if (session.room.status !== 'PLAYING')
+            return;
+        if (session.timer) {
+            clearTimeout(session.timer);
+            session.timer = undefined;
+        }
+        const nextIndex = session.room.currentQuestionIndex + 1;
+        if (nextIndex >= session.questions.length) {
+            await this.finishMatch(session);
+            return;
+        }
+        const question = session.questions[nextIndex];
+        const durationMs = this.getPerQuestionDurationMs(session.room);
+        const now = Date.now();
+        session.room.currentQuestionIndex = nextIndex;
+        session.room.currentQuestionId = question.id;
+        session.room.questionStartedAt = now;
+        session.room.questionEndsAt = now + durationMs;
+        for (const player of session.users.values()) {
+            player.hasAnsweredCurrentQuestion = false;
+        }
+        await this.saveSessionToRedis(session);
+        const activeUserIds = [...session.users.values()]
+            .filter((u) => u.status !== 'LEFT')
+            .map((u) => u.userId);
+        await this.broadcastToRoom(activeUserIds, 'battle:question', this.createRoomState(session));
+        session.timer = setTimeout(() => {
+            void this.advanceQuestion(roomId);
+        }, durationMs);
+        if (typeof session.timer.unref === 'function') {
+            session.timer.unref();
+        }
+    }
+    async finishMatch(session) {
+        if (session.room.status === 'FINISHED')
+            return;
+        session.room.status = 'FINISHED';
+        session.room.finishedAt = Date.now();
+        session.room.currentQuestionId = undefined;
+        session.room.questionStartedAt = undefined;
+        session.room.questionEndsAt = undefined;
+        if (session.timer) {
+            clearTimeout(session.timer);
+            session.timer = undefined;
+        }
+        this.rankingService.updateRanking(session);
+        await this.saveSessionToRedis(session, 5 * 60 * 1000);
+        const players = [...session.users.values()];
+        await Promise.all(players.map((player) => this.playerGameStateService.leaveGame(player.userId)));
+        const userIds = players.map((p) => p.userId);
+        await this.broadcastToRoom(userIds, 'battle:finished', this.createRoomState(session));
+    }
+    async broadcastToRoom(userIds, event, payload) {
+        if (!userIds.length)
+            return;
+        await this.eventsService.emitToUsers(userIds, event, payload);
     }
     async disconnectUser(roomId, userId, onError) {
         const session = await this.getRoom(roomId);
@@ -580,9 +1314,15 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
                 this.disconnectTimers.delete(timerKey);
             }
             session.users.delete(userId);
+            await this.playerGameStateService.leaveGame(userId);
+            const activeRemaining = [...session.users.values()].filter((u) => u.status !== 'LEFT');
+            if (session.room.status === 'PLAYING' && activeRemaining.length === 0) {
+                await this.finishMatch(session);
+                socketCallbackWithRoomState(this.createRoomState(session));
+                return;
+            }
             this.rankingService.updateRanking(session);
             await this.saveSessionToRedis(session);
-            await this.playerGameStateService.leaveGame(userId);
             const state = this.createRoomState(session);
             socketCallbackWithRoomState(state);
             return;
@@ -615,6 +1355,10 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
             const sessionLength = session.questions.length;
             const questionIndex = session.questions.findIndex((item) => item.id === qId);
             if (questionIndex === -1) {
+                onError?.('This question is no longer active');
+                return;
+            }
+            if (questionIndex !== session.room.currentQuestionIndex) {
                 onError?.('This question is no longer active');
                 return;
             }
@@ -658,6 +1402,12 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
             this.rankingService.updateRanking(session);
             await this.saveSessionToRedis(session);
             socketCallbackWithRoomState(this.createRoomState(session, userId));
+            const activePlayers = [...session.users.values()].filter((p) => p.status !== 'LEFT');
+            const allAnswered = activePlayers.length > 0 &&
+                activePlayers.every((p) => p.hasAnsweredCurrentQuestion);
+            if (allAnswered) {
+                void this.advanceQuestion(roomId);
+            }
             return;
         }
         catch (error) {
@@ -709,16 +1459,23 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
             return;
         user.status = 'LEFT';
         user.ready = false;
+        await this.playerGameStateService.leaveGame(userId);
         this.rankingService.updateRanking(session);
         await this.saveSessionToRedis(session);
+        const activeRemaining = [...session.users.values()].filter((u) => u.status !== 'LEFT');
+        if (session.room.status === 'PLAYING' && activeRemaining.length === 0) {
+            await this.finishMatch(session);
+            return;
+        }
+        const remainingUserIds = activeRemaining.map((u) => u.userId);
+        await this.broadcastToRoom(remainingUserIds, 'battle:player-left', this.createRoomState(session));
     }
-    async isRoomExpired(roomId) {
-        const session = this.sessions.get(roomId);
-        const status = session?.room.status;
+    async isRoomExpired(session) {
+        const status = session.room.status;
         if (status === 'WAITING' || status === 'COUNTDOWN') {
             return false;
         }
-        const exists = await this.redisService.client.exists(`game:room:${roomId}:expiration`);
+        const exists = await this.redisService.client.exists(`game:room:${session.room.roomId}:expiration`);
         return exists === 0;
     }
     areAllPlayersReady(session) {
@@ -800,44 +1557,21 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
         }
         return code;
     }
-    delay(ms) {
-        return new Promise((resolve) => setTimeout(resolve, ms));
-    }
 };
 exports.QuizBattleService = QuizBattleService;
 exports.QuizBattleService = QuizBattleService = QuizBattleService_1 = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [typeof (_a = typeof redis_1.RedisService !== "undefined" && redis_1.RedisService) === "function" ? _a : Object, typeof (_b = typeof quiz_battle_question_service_1.QuizBattleQuestionService !== "undefined" && quiz_battle_question_service_1.QuizBattleQuestionService) === "function" ? _b : Object, typeof (_c = typeof quiz_battle_ranking_service_1.QuizBattleRankingService !== "undefined" && quiz_battle_ranking_service_1.QuizBattleRankingService) === "function" ? _c : Object, typeof (_d = typeof player_game_state_service_1.PlayerGameStateService !== "undefined" && player_game_state_service_1.PlayerGameStateService) === "function" ? _d : Object])
+    __metadata("design:paramtypes", [typeof (_a = typeof redis_1.RedisService !== "undefined" && redis_1.RedisService) === "function" ? _a : Object, typeof (_b = typeof quiz_battle_question_service_1.QuizBattleQuestionService !== "undefined" && quiz_battle_question_service_1.QuizBattleQuestionService) === "function" ? _b : Object, typeof (_c = typeof quiz_battle_ranking_service_1.QuizBattleRankingService !== "undefined" && quiz_battle_ranking_service_1.QuizBattleRankingService) === "function" ? _c : Object, typeof (_d = typeof player_game_state_service_1.PlayerGameStateService !== "undefined" && player_game_state_service_1.PlayerGameStateService) === "function" ? _d : Object, typeof (_e = typeof events_service_1.EventsService !== "undefined" && events_service_1.EventsService) === "function" ? _e : Object])
 ], QuizBattleService);
 
 
-/***/ }),
-/* 6 */
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+/***/ },
 
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __exportStar = (this && this.__exportStar) || function(m, exports) {
-    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
-};
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-__exportStar(__webpack_require__(7), exports);
-__exportStar(__webpack_require__(8), exports);
-
-
-/***/ }),
-/* 7 */
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+/***/ "./apps/quiz-battle-service/src/services/player.game.state.service.ts"
+/*!****************************************************************************!*\
+  !*** ./apps/quiz-battle-service/src/services/player.game.state.service.ts ***!
+  \****************************************************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
 
 
 var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
@@ -846,29 +1580,73 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.RedisModule = void 0;
-const common_1 = __webpack_require__(3);
-const redis_service_1 = __webpack_require__(8);
-let RedisModule = class RedisModule {
+var __metadata = (this && this.__metadata) || function (k, v) {
+    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
-exports.RedisModule = RedisModule;
-exports.RedisModule = RedisModule = __decorate([
-    (0, common_1.Global)(),
-    (0, common_1.Module)({
-        providers: [
-            redis_service_1.RedisService,
-        ],
-        exports: [
-            redis_service_1.RedisService,
-        ],
-    })
-], RedisModule);
+var PlayerGameStateService_1;
+var _a;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.PlayerGameStateService = void 0;
+const common_1 = __webpack_require__(/*! @nestjs/common */ "@nestjs/common");
+const redis_1 = __webpack_require__(/*! @app/redis */ "./libs/redis/src/index.ts");
+let PlayerGameStateService = PlayerGameStateService_1 = class PlayerGameStateService {
+    redisService;
+    logger = new common_1.Logger(PlayerGameStateService_1.name);
+    KEY = 'game:players:room';
+    constructor(redisService) {
+        this.redisService = redisService;
+    }
+    async enterGame(userId, roomId) {
+        const existingRoomId = await this.getRoomId(userId);
+        if (existingRoomId === roomId) {
+            return true;
+        }
+        if (existingRoomId) {
+            return false;
+        }
+        await this.redisService.client.hset(this.KEY, userId, roomId);
+        return true;
+    }
+    async startGame(roomId, gameDuration = 1000 * 60 * 10) {
+        const key = `game:room:${roomId}:expiration`;
+        const result = await this.redisService.client.set(key, Date.now().toString(), 'PX', gameDuration, 'NX');
+        return result === 'OK';
+    }
+    async getRoomId(userId) {
+        return this.redisService.client.hget(this.KEY, userId);
+    }
+    async isInGame(userId) {
+        const roomId = await this.getRoomId(userId);
+        return roomId !== null;
+    }
+    async leaveGame(userId) {
+        const removed = await this.redisService.client.hdel(this.KEY, userId);
+        return removed === 1;
+    }
+    async getAllPlayers() {
+        return this.redisService.client.hgetall(this.KEY);
+    }
+    async getPlayersInRoom(roomId) {
+        const players = await this.getAllPlayers();
+        return Object.entries(players)
+            .filter(([, playerRoomId]) => playerRoomId === roomId)
+            .map(([userId]) => userId);
+    }
+};
+exports.PlayerGameStateService = PlayerGameStateService;
+exports.PlayerGameStateService = PlayerGameStateService = PlayerGameStateService_1 = __decorate([
+    (0, common_1.Injectable)(),
+    __metadata("design:paramtypes", [typeof (_a = typeof redis_1.RedisService !== "undefined" && redis_1.RedisService) === "function" ? _a : Object])
+], PlayerGameStateService);
 
 
-/***/ }),
-/* 8 */
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+/***/ },
+
+/***/ "./apps/quiz-battle-service/src/services/quiz-battle-question.service.ts"
+/*!*******************************************************************************!*\
+  !*** ./apps/quiz-battle-service/src/services/quiz-battle-question.service.ts ***!
+  \*******************************************************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
 
 
 var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
@@ -883,88 +1661,677 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
-var RedisService_1;
-var _a;
+var QuizBattleQuestionService_1;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.RedisService = void 0;
-const config_1 = __webpack_require__(9);
-const common_1 = __webpack_require__(3);
-const ioredis_1 = __importDefault(__webpack_require__(17));
-let RedisService = RedisService_1 = class RedisService {
-    configService;
-    client;
-    logger = new common_1.Logger(RedisService_1.name);
-    constructor(configService) {
-        this.configService = configService;
-        const redisUrl = this.configService.getEnv('REDIS_URL');
-        if (!redisUrl) {
-            throw new Error('REDIS_URL environment variable is not defined');
+exports.QuizBattleQuestionService = void 0;
+const common_1 = __webpack_require__(/*! @nestjs/common */ "@nestjs/common");
+const openai_1 = __importDefault(__webpack_require__(/*! openai */ "openai"));
+let QuizBattleQuestionService = QuizBattleQuestionService_1 = class QuizBattleQuestionService {
+    logger = new common_1.Logger(QuizBattleQuestionService_1.name);
+    ai;
+    model;
+    maxRetries;
+    timeoutMs;
+    constructor() {
+        const apiKey = process.env.OPENROUTER_API_KEY;
+        if (!apiKey) {
+            throw new Error('OPENROUTER_API_KEY is not configured');
         }
-        this.client = new ioredis_1.default(redisUrl);
+        this.model =
+            process.env.OPENROUTER_MODEL ||
+                'google/gemma-3-27b-it:free';
+        this.maxRetries = Math.max(1, Number(process.env.OPENROUTER_MAX_RETRIES || 2));
+        this.timeoutMs = Math.max(10_000, Number(process.env.OPENROUTER_TIMEOUT_MS || 60_000));
+        this.ai = new openai_1.default({
+            apiKey,
+            baseURL: 'https://openrouter.ai/api/v1',
+            defaultHeaders: {
+                'HTTP-Referer': 'https://quizbattle.app',
+                'X-Title': 'QuizBattle',
+            },
+        });
+        this.logger.log(`OpenRouter initialized | model=${this.model} | retries=${this.maxRetries} | timeout=${this.timeoutMs}ms`);
     }
-    async onModuleInit() {
-        await this.client.config('SET', 'notify-keyspace-events', 'Ex');
-        this.logger.log('Redis key expiration notifications enabled');
-    }
-    async onModuleDestroy() {
-        await this.client.quit();
-    }
-    async get(key) {
-        const value = await this.client.get(key);
-        if (!value) {
-            return null;
+    async generateQuestions(options = {}, room) {
+        const count = this.normalizeCount(options.count);
+        const difficulty = this.normalizeDifficulty(options.difficulty);
+        const topic = this.cleanText(options.topic) ||
+            'General Knowledge';
+        const prompt = this.cleanText(options.prompt) || '';
+        const mode = this.cleanText(options.mode) ||
+            'STANDARD';
+        this.logger.log(`Generating quiz | count=${count} | difficulty=${difficulty} | topic="${topic}" | mode="${mode}"`);
+        try {
+            const questions = await this.createDummyQuestions();
+            if (questions.length !== count) {
+                throw new Error(`Expected ${count} questions but received ${questions.length}`);
+            }
+            this.logger.log(`Successfully generated ${questions.length} questions`);
+            return questions;
         }
-        return JSON.parse(value);
-    }
-    async set(key, value, ttl) {
-        const data = JSON.stringify(value);
-        if (ttl) {
-            await this.client.set(key, data, 'EX', ttl);
-            return;
+        catch (error) {
+            this.logger.error('OpenRouter quiz generation failed', error instanceof Error
+                ? error.stack
+                : String(error));
+            throw new common_1.InternalServerErrorException('Unable to generate quiz questions right now. Please try again.');
         }
-        await this.client.set(key, data);
     }
-    async delete(key) {
-        await this.client.del(key);
+    async requestQuestionsFromAI(params) {
+        const systemPrompt = this.buildSystemPrompt(params);
+        const userPrompt = this.buildUserPrompt(params);
+        let lastError;
+        for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+            try {
+                this.logger.log(`OpenRouter request attempt ${attempt}/${this.maxRetries}`);
+                const response = await this.generateContentWithTimeout(systemPrompt, userPrompt);
+                const modelUsed = response.model;
+                const finishReason = response.choices?.[0]
+                    ?.finish_reason;
+                const message = response.choices?.[0]?.message;
+                const content = typeof message?.content === 'string'
+                    ? message.content
+                    : '';
+                this.logger.debug(`OpenRouter model used: ${modelUsed}`);
+                this.logger.debug(`OpenRouter finish reason: ${finishReason}`);
+                this.logger.debug(`OpenRouter response length: ${content.length}`);
+                if (!content.trim()) {
+                    throw new Error('OpenRouter returned an empty response');
+                }
+                if (content
+                    .trim()
+                    .toLowerCase()
+                    .startsWith('user safety:')) {
+                    throw new Error(`OpenRouter provider returned safety response instead of quiz JSON: ${content}`);
+                }
+                const jsonText = this.cleanJsonResponse(content);
+                let parsed;
+                try {
+                    parsed = JSON.parse(jsonText);
+                }
+                catch (error) {
+                    this.logger.error(`Invalid JSON returned by OpenRouter`);
+                    this.logger.error(`Raw response: ${content}`);
+                    throw new Error(`OpenRouter returned invalid JSON`);
+                }
+                this.validateAIResponse(parsed, params.count);
+                return parsed;
+            }
+            catch (error) {
+                lastError = error;
+                const retryable = this.isRetryableError(error);
+                this.logger.warn(`OpenRouter attempt ${attempt} failed | retryable=${retryable} | error=${error instanceof Error
+                    ? error.message
+                    : String(error)}`);
+                if (!retryable ||
+                    attempt >= this.maxRetries) {
+                    break;
+                }
+                const delay = this.calculateBackoff(attempt);
+                this.logger.warn(`Retrying OpenRouter request in ${delay}ms...`);
+                await this.sleep(delay);
+            }
+        }
+        throw lastError instanceof Error
+            ? lastError
+            : new Error(String(lastError));
     }
-    async exists(key) {
-        return this.client.exists(key);
+    async generateContentWithTimeout(systemPrompt, userPrompt) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => {
+            controller.abort();
+        }, this.timeoutMs);
+        try {
+            return await this.ai.chat.completions.create({
+                model: this.model,
+                messages: [
+                    {
+                        role: 'system',
+                        content: systemPrompt,
+                    },
+                    {
+                        role: 'user',
+                        content: userPrompt,
+                    },
+                ],
+                temperature: 0.7,
+                max_tokens: 8000,
+            }, {
+                signal: controller.signal,
+            });
+        }
+        catch (error) {
+            if (error instanceof Error &&
+                error.name === 'AbortError') {
+                throw new Error(`OpenRouter request timed out after ${this.timeoutMs}ms`);
+            }
+            throw error;
+        }
+        finally {
+            clearTimeout(timeout);
+        }
+    }
+    buildSystemPrompt(params) {
+        return `
+You are the QuizBattle AI question generator.
+
+Generate high-quality multiple-choice questions.
+
+STRICT OUTPUT RULE:
+
+Return ONLY valid JSON.
+
+Do NOT return markdown.
+Do NOT return a code block.
+Do NOT return explanations outside JSON.
+Do NOT return any introductory text.
+Do NOT return any text before or after the JSON.
+
+The response MUST be directly parseable by JSON.parse().
+
+The JSON MUST have exactly this structure:
+
+{
+  "questions": [
+    {
+      "question": "Question text",
+      "options": [
+        "Option 1",
+        "Option 2",
+        "Option 3",
+        "Option 4"
+      ],
+      "correctOptionIndex": 0,
+      "explanation": "Short factual explanation."
+    }
+  ]
+}
+
+==================================================
+REQUIREMENTS
+==================================================
+
+Generate EXACTLY ${params.count} questions.
+
+Each question MUST have:
+
+- question
+- exactly 4 options
+- correctOptionIndex
+- explanation
+
+correctOptionIndex MUST be:
+
+0, 1, 2, or 3
+
+There must be exactly ONE correct answer.
+
+Do NOT use:
+
+- All of the above
+- None of the above
+- Multiple correct answers
+- Ambiguous answers
+- Subjective answers
+- Duplicate options
+- Duplicate questions
+
+==================================================
+DIFFICULTY
+==================================================
+
+${params.difficulty}
+
+EASY:
+Simple/common knowledge.
+
+MEDIUM:
+Requires moderate knowledge or reasoning.
+
+HARD:
+Requires deeper knowledge.
+
+==================================================
+TOPIC
+==================================================
+
+${params.topic}
+
+==================================================
+GAME MODE
+==================================================
+
+${params.mode}
+
+==================================================
+QUESTION QUALITY
+==================================================
+
+Questions must be:
+
+- factual
+- clear
+- unambiguous
+- suitable for multiplayer quiz
+- grammatically correct
+- relevant to the topic
+
+==================================================
+FINAL RULE
+==================================================
+
+Return ONLY the JSON object.
+
+No markdown.
+No code fences.
+No additional text.
+`.trim();
+    }
+    buildUserPrompt(params) {
+        return `
+Generate ${params.count} ${params.difficulty} quiz questions.
+
+Topic:
+${params.topic}
+
+Game mode:
+${params.mode}
+
+Additional instructions:
+${params.prompt || 'None'}
+
+Requirements:
+
+- Exactly ${params.count} questions
+- Exactly 4 options per question
+- Exactly one correct option
+- correctOptionIndex must be 0, 1, 2, or 3
+- Every question must have an explanation
+- No duplicate questions
+- No duplicate options
+- No "all of the above"
+- No "none of the above"
+- No markdown
+- Return ONLY JSON
+
+Return the JSON now.
+`.trim();
+    }
+    cleanJsonResponse(content) {
+        let text = content.trim();
+        if (text.startsWith('```json')) {
+            text = text.substring(7);
+        }
+        if (text.startsWith('```')) {
+            text = text.substring(3);
+        }
+        if (text.endsWith('```')) {
+            text = text.substring(0, text.length - 3);
+        }
+        text = text.trim();
+        const firstBrace = text.indexOf('{');
+        const lastBrace = text.lastIndexOf('}');
+        if (firstBrace !== -1 &&
+            lastBrace !== -1 &&
+            lastBrace > firstBrace) {
+            text = text.substring(firstBrace, lastBrace + 1);
+        }
+        return text.trim();
+    }
+    validateAIResponse(response, expectedCount) {
+        if (!response ||
+            typeof response !== 'object') {
+            throw new Error('AI response is not an object');
+        }
+        const data = response;
+        if (!Array.isArray(data.questions)) {
+            throw new Error('AI response does not contain questions array');
+        }
+        if (data.questions.length !==
+            expectedCount) {
+            throw new Error(`Expected ${expectedCount} questions but received ${data.questions.length}`);
+        }
+        const questionSet = new Set();
+        data.questions.forEach((rawQuestion, index) => {
+            if (!rawQuestion ||
+                typeof rawQuestion !==
+                    'object') {
+                throw new Error(`Question ${index + 1} is invalid`);
+            }
+            const question = rawQuestion;
+            if (typeof question.question !==
+                'string' ||
+                !question.question.trim()) {
+                throw new Error(`Question ${index + 1} has invalid text`);
+            }
+            const normalizedQuestion = this.normalizeForDuplicateCheck(question.question);
+            if (questionSet.has(normalizedQuestion)) {
+                throw new Error(`Duplicate question detected: ${question.question}`);
+            }
+            questionSet.add(normalizedQuestion);
+            if (!Array.isArray(question.options)) {
+                throw new Error(`Question ${index + 1} has no options`);
+            }
+            if (question.options.length !== 4) {
+                throw new Error(`Question ${index + 1} must have exactly 4 options`);
+            }
+            const optionSet = new Set();
+            question.options.forEach((option, optionIndex) => {
+                if (typeof option !==
+                    'string' ||
+                    !option.trim()) {
+                    throw new Error(`Question ${index + 1} option ${optionIndex + 1} is invalid`);
+                }
+                const normalizedOption = this.normalizeForDuplicateCheck(option);
+                if (optionSet.has(normalizedOption)) {
+                    throw new Error(`Question ${index + 1} contains duplicate options`);
+                }
+                optionSet.add(normalizedOption);
+            });
+            if (typeof question.correctOptionIndex !==
+                'number') {
+                throw new Error(`Question ${index + 1} has invalid correctOptionIndex`);
+            }
+            if (!Number.isInteger(question.correctOptionIndex) ||
+                question.correctOptionIndex <
+                    0 ||
+                question.correctOptionIndex >
+                    3) {
+                throw new Error(`Question ${index + 1} correctOptionIndex must be 0-3`);
+            }
+            if (typeof question.explanation !==
+                'string' ||
+                !question.explanation.trim()) {
+                throw new Error(`Question ${index + 1} has invalid explanation`);
+            }
+        });
+    }
+    transformQuestions(aiQuestions, difficulty, topic) {
+        return aiQuestions.map((aiQuestion, questionIndex) => {
+            const options = aiQuestion.options.map((text, optionIndex) => ({
+                id: this.generateOptionId(questionIndex, optionIndex),
+                text: text.trim(),
+            }));
+            const correctOption = options[aiQuestion.correctOptionIndex];
+            if (!correctOption) {
+                throw new Error(`Invalid correct option for question ${questionIndex + 1}`);
+            }
+            const settings = this.getDifficultySettings(difficulty);
+            const question = {
+                id: this.generateQuestionId(questionIndex),
+                index: questionIndex,
+                type: 'MCQ',
+                difficulty,
+                topic,
+                question: aiQuestion.question.trim(),
+                media: null,
+                options,
+                correctOptionId: correctOption.id,
+                points: settings.points,
+                timeLimitSeconds: settings.timeLimitSeconds,
+                status: 'WAITING',
+                explanation: aiQuestion.explanation.trim(),
+                stats: {
+                    totalAnswered: 0,
+                    correctCount: 0,
+                    optionDistribution: options.reduce((distribution, option) => {
+                        distribution[option.id] = 0;
+                        return distribution;
+                    }, {}),
+                },
+            };
+            return question;
+        });
+    }
+    getDifficultySettings(difficulty) {
+        switch (difficulty) {
+            case 'EASY':
+                return {
+                    points: 10,
+                    timeLimitSeconds: 15,
+                };
+            case 'HARD':
+                return {
+                    points: 30,
+                    timeLimitSeconds: 30,
+                };
+            case 'MEDIUM':
+            default:
+                return {
+                    points: 20,
+                    timeLimitSeconds: 20,
+                };
+        }
+    }
+    generateQuestionId(index) {
+        return [
+            'question',
+            Date.now(),
+            index,
+            Math.random()
+                .toString(36)
+                .substring(2, 8),
+        ].join('_');
+    }
+    generateOptionId(questionIndex, optionIndex) {
+        return [
+            'option',
+            Date.now(),
+            questionIndex,
+            optionIndex,
+            Math.random()
+                .toString(36)
+                .substring(2, 8),
+        ].join('_');
+    }
+    normalizeCount(count) {
+        if (typeof count !== 'number' ||
+            !Number.isFinite(count)) {
+            return 5;
+        }
+        return Math.min(50, Math.max(1, Math.floor(count)));
+    }
+    normalizeDifficulty(difficulty) {
+        const value = difficulty
+            ?.trim()
+            .toUpperCase();
+        if (value === 'EASY' ||
+            value === 'MEDIUM' ||
+            value === 'HARD') {
+            return value;
+        }
+        return 'MEDIUM';
+    }
+    cleanText(value) {
+        if (typeof value !== 'string') {
+            return undefined;
+        }
+        const result = value.trim();
+        return result.length
+            ? result
+            : undefined;
+    }
+    normalizeForDuplicateCheck(value) {
+        return value
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .replace(/[^\p{L}\p{N}\s]/gu, '')
+            .trim();
+    }
+    isRetryableError(error) {
+        if (!error) {
+            return false;
+        }
+        const message = error instanceof Error
+            ? error.message.toLowerCase()
+            : String(error).toLowerCase();
+        if (message.includes('timeout') ||
+            message.includes('timed out') ||
+            message.includes('abort')) {
+            return true;
+        }
+        if (message.includes('econnreset') ||
+            message.includes('socket hang up') ||
+            message.includes('network')) {
+            return true;
+        }
+        if (message.includes('429') ||
+            message.includes('500') ||
+            message.includes('502') ||
+            message.includes('503') ||
+            message.includes('504') ||
+            message.includes('rate limit') ||
+            message.includes('temporarily unavailable')) {
+            return true;
+        }
+        if (message.includes('invalid json') ||
+            message.includes('user safety:')) {
+            return false;
+        }
+        return false;
+    }
+    calculateBackoff(attempt) {
+        const base = 1000;
+        const exponential = base *
+            Math.pow(2, attempt - 1);
+        const jitter = Math.floor(Math.random() * 500);
+        return Math.min(8000, exponential + jitter);
+    }
+    async sleep(milliseconds) {
+        await new Promise((resolve) => setTimeout(resolve, milliseconds));
+    }
+    async createDummyQuestions() {
+        await this.sleep(2000);
+        return Array.from({ length: 5 }, (_, index) => this.createDummyQuestion(index));
+    }
+    createDummyQuestion(index) {
+        const question = {
+            id: this.generateQuestionId(index),
+            index,
+            type: 'MCQ',
+            difficulty: 'MEDIUM',
+            topic: 'General Knowledge',
+            question: `This is dummy question ${index + 1}.`,
+            media: null,
+            options: [
+                {
+                    id: this.generateOptionId(index, 0),
+                    text: `Question ${index + 1} - Option 1`,
+                },
+                {
+                    id: this.generateOptionId(index, 1),
+                    text: `Question ${index + 1} - Option 2`,
+                },
+                {
+                    id: this.generateOptionId(index, 2),
+                    text: `Question ${index + 1} - Option 3`,
+                },
+                {
+                    id: this.generateOptionId(index, 3),
+                    text: `Question ${index + 1} - Option 4`,
+                },
+            ],
+            correctOptionId: this.generateOptionId(index, 0),
+            points: 20,
+            timeLimitSeconds: 20,
+            status: 'WAITING',
+            explanation: `Option 1 is the correct answer for dummy question ${index + 1}.`,
+            stats: {
+                totalAnswered: 0,
+                correctCount: 0,
+                optionDistribution: {},
+            },
+        };
+        const stats = question.stats ?? {
+            totalAnswered: 0,
+            correctCount: 0,
+            optionDistribution: {},
+        };
+        stats.optionDistribution ??= {};
+        question.stats = stats;
+        question.options.forEach((option) => {
+            stats.optionDistribution[option.id] = 0;
+        });
+        return question;
     }
 };
-exports.RedisService = RedisService;
-exports.RedisService = RedisService = RedisService_1 = __decorate([
+exports.QuizBattleQuestionService = QuizBattleQuestionService;
+exports.QuizBattleQuestionService = QuizBattleQuestionService = QuizBattleQuestionService_1 = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [typeof (_a = typeof config_1.ConfigService !== "undefined" && config_1.ConfigService) === "function" ? _a : Object])
-], RedisService);
+    __metadata("design:paramtypes", [])
+], QuizBattleQuestionService);
 
 
-/***/ }),
-/* 9 */
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+/***/ },
+
+/***/ "./apps/quiz-battle-service/src/services/quiz-battle-ranking.service.ts"
+/*!******************************************************************************!*\
+  !*** ./apps/quiz-battle-service/src/services/quiz-battle-ranking.service.ts ***!
+  \******************************************************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
 
 
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __exportStar = (this && this.__exportStar) || function(m, exports) {
-    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-__exportStar(__webpack_require__(10), exports);
-__exportStar(__webpack_require__(11), exports);
+exports.QuizBattleRankingService = void 0;
+const common_1 = __webpack_require__(/*! @nestjs/common */ "@nestjs/common");
+let QuizBattleRankingService = class QuizBattleRankingService {
+    updateRanking(session) {
+        const users = [...session.users.values()]
+            .filter((user) => user.status !== 'LEFT')
+            .sort((a, b) => {
+            if (b.score !== a.score) {
+                return b.score - a.score;
+            }
+            if (b.correctAnswers !== a.correctAnswers) {
+                return b.correctAnswers - a.correctAnswers;
+            }
+            if (b.answeredQuestions !== a.answeredQuestions) {
+                return b.answeredQuestions - a.answeredQuestions;
+            }
+            return a.joinedAt - b.joinedAt;
+        });
+        const rankings = users.map((user, index) => {
+            user.rank = index + 1;
+            return {
+                userId: user.userId,
+                username: user.username,
+                avatar: user.avatar,
+                avatarId: user.avatarId,
+                score: user.score,
+                correctAnswers: user.correctAnswers,
+                answeredQuestions: user.answeredQuestions,
+                rank: user.rank,
+                status: user.status,
+            };
+        });
+        session.ranking = {
+            roomId: session.room.roomId,
+            rankings,
+            updatedAt: Date.now(),
+        };
+    }
+    getRanking(session) {
+        return session.ranking;
+    }
+};
+exports.QuizBattleRankingService = QuizBattleRankingService;
+exports.QuizBattleRankingService = QuizBattleRankingService = __decorate([
+    (0, common_1.Injectable)()
+], QuizBattleRankingService);
 
 
-/***/ }),
-/* 10 */
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+/***/ },
+
+/***/ "./libs/config/src/config.module.ts"
+/*!******************************************!*\
+  !*** ./libs/config/src/config.module.ts ***!
+  \******************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
 
 
 var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
@@ -975,9 +2342,9 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ConfigModule = void 0;
-const common_1 = __webpack_require__(3);
-const config_service_1 = __webpack_require__(11);
-const config_1 = __webpack_require__(12);
+const common_1 = __webpack_require__(/*! @nestjs/common */ "@nestjs/common");
+const config_service_1 = __webpack_require__(/*! ./config.service */ "./libs/config/src/config.service.ts");
+const config_1 = __webpack_require__(/*! @nestjs/config */ "@nestjs/config");
 let ConfigModule = class ConfigModule {
 };
 exports.ConfigModule = ConfigModule;
@@ -995,9 +2362,13 @@ exports.ConfigModule = ConfigModule = __decorate([
 ], ConfigModule);
 
 
-/***/ }),
-/* 11 */
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+/***/ },
+
+/***/ "./libs/config/src/config.service.ts"
+/*!*******************************************!*\
+  !*** ./libs/config/src/config.service.ts ***!
+  \*******************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
 
 
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
@@ -1048,12 +2419,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ConfigService = void 0;
-const common_1 = __webpack_require__(3);
-const config_1 = __webpack_require__(12);
-const fs_1 = __webpack_require__(13);
-const path = __importStar(__webpack_require__(14));
-const child_process_1 = __webpack_require__(15);
-const services_configs_1 = __importDefault(__webpack_require__(16));
+const common_1 = __webpack_require__(/*! @nestjs/common */ "@nestjs/common");
+const config_1 = __webpack_require__(/*! @nestjs/config */ "@nestjs/config");
+const fs_1 = __webpack_require__(/*! fs */ "fs");
+const path = __importStar(__webpack_require__(/*! path */ "path"));
+const child_process_1 = __webpack_require__(/*! child_process */ "child_process");
+const services_configs_1 = __importDefault(__webpack_require__(/*! ./service/services-configs */ "./libs/config/src/service/services-configs.ts"));
 let ConfigService = class ConfigService {
     configService;
     constructor(configService) {
@@ -1133,33 +2504,41 @@ exports.ConfigService = ConfigService = __decorate([
 ], ConfigService);
 
 
-/***/ }),
-/* 12 */
-/***/ ((module) => {
+/***/ },
 
-module.exports = require("@nestjs/config");
+/***/ "./libs/config/src/index.ts"
+/*!**********************************!*\
+  !*** ./libs/config/src/index.ts ***!
+  \**********************************/
+(__unused_webpack_module, exports, __webpack_require__) {
 
-/***/ }),
-/* 13 */
-/***/ ((module) => {
 
-module.exports = require("fs");
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+__exportStar(__webpack_require__(/*! ./config.module */ "./libs/config/src/config.module.ts"), exports);
+__exportStar(__webpack_require__(/*! ./config.service */ "./libs/config/src/config.service.ts"), exports);
 
-/***/ }),
-/* 14 */
-/***/ ((module) => {
 
-module.exports = require("path");
+/***/ },
 
-/***/ }),
-/* 15 */
-/***/ ((module) => {
-
-module.exports = require("child_process");
-
-/***/ }),
-/* 16 */
-/***/ ((__unused_webpack_module, exports) => {
+/***/ "./libs/config/src/service/services-configs.ts"
+/*!*****************************************************!*\
+  !*** ./libs/config/src/service/services-configs.ts ***!
+  \*****************************************************/
+(__unused_webpack_module, exports) {
 
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
@@ -1189,15 +2568,76 @@ const MICRO_SERVICES_CONFIGS = {
 exports["default"] = MICRO_SERVICES_CONFIGS;
 
 
-/***/ }),
-/* 17 */
-/***/ ((module) => {
+/***/ },
 
-module.exports = require("ioredis");
+/***/ "./libs/redis/src/index.ts"
+/*!*********************************!*\
+  !*** ./libs/redis/src/index.ts ***!
+  \*********************************/
+(__unused_webpack_module, exports, __webpack_require__) {
 
-/***/ }),
-/* 18 */
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __exportStar = (this && this.__exportStar) || function(m, exports) {
+    for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+__exportStar(__webpack_require__(/*! ./redis.module */ "./libs/redis/src/redis.module.ts"), exports);
+__exportStar(__webpack_require__(/*! ./redis.service */ "./libs/redis/src/redis.service.ts"), exports);
+
+
+/***/ },
+
+/***/ "./libs/redis/src/redis.module.ts"
+/*!****************************************!*\
+  !*** ./libs/redis/src/redis.module.ts ***!
+  \****************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
+
+
+var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+    return c > 3 && r && Object.defineProperty(target, key, r), r;
+};
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.RedisModule = void 0;
+const common_1 = __webpack_require__(/*! @nestjs/common */ "@nestjs/common");
+const redis_service_1 = __webpack_require__(/*! ./redis.service */ "./libs/redis/src/redis.service.ts");
+let RedisModule = class RedisModule {
+};
+exports.RedisModule = RedisModule;
+exports.RedisModule = RedisModule = __decorate([
+    (0, common_1.Global)(),
+    (0, common_1.Module)({
+        providers: [
+            redis_service_1.RedisService,
+        ],
+        exports: [
+            redis_service_1.RedisService,
+        ],
+    })
+], RedisModule);
+
+
+/***/ },
+
+/***/ "./libs/redis/src/redis.service.ts"
+/*!*****************************************!*\
+  !*** ./libs/redis/src/redis.service.ts ***!
+  \*****************************************/
+(__unused_webpack_module, exports, __webpack_require__) {
 
 
 var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
@@ -1209,1094 +2649,217 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
-var QuizBattleQuestionService_1;
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.QuizBattleQuestionService = void 0;
-const common_1 = __webpack_require__(3);
-const genai_1 = __webpack_require__(19);
-let QuizBattleQuestionService = QuizBattleQuestionService_1 = class QuizBattleQuestionService {
-    logger = new common_1.Logger(QuizBattleQuestionService_1.name);
-    ai;
-    model;
-    maxRetries;
-    timeoutMs;
-    constructor() {
-        const apiKey = process.env.GEMINI_API_KEY?.trim();
-        if (!apiKey) {
-            throw new Error('GEMINI_API_KEY is not configured');
-        }
-        this.ai = new genai_1.GoogleGenAI({
-            apiKey,
-        });
-        this.model = process.env.GEMINI_MODEL?.trim() || 'gemini-3.8-flash';
-        this.maxRetries = this.parseNumber(process.env.GEMINI_MAX_RETRIES, 3);
-        this.timeoutMs = this.parseNumber(process.env.GEMINI_TIMEOUT_MS, 30000);
-        this.logger.log(`Gemini initialized | model=${this.model} | retries=${this.maxRetries} | timeout=${this.timeoutMs}ms`);
-    }
-    async generateQuestions(options) {
-        const numberOfQuestions = this.normalizeQuestionCount(options.numberOfQuestions);
-        const difficulty = this.normalizeDifficulty(options.difficulty);
-        const topic = options.topic?.trim() || 'General Knowledge';
-        const prompt = options.prompt?.trim() || '';
-        const mode = options.mode?.trim() || 'CLASSIC';
-        this.logger.log(`Generating quiz | topic="${topic}" | difficulty=${difficulty} | questions=${numberOfQuestions} | mode=${mode}`);
-        const aiResponse = await this.requestQuestionsFromAI({
-            topic,
-            difficulty,
-            numberOfQuestions,
-            prompt,
-            mode,
-        });
-        return this.transformQuestions(aiResponse.questions, {
-            topic,
-            difficulty,
-        });
-    }
-    getQuestion(session, questionId) {
-        return (session.questions.find((question) => question.id === questionId) ?? null);
-    }
-    async requestQuestionsFromAI(options) {
-        const { topic, difficulty, numberOfQuestions, prompt, mode } = options;
-        const systemPrompt = `
-You are the official AI Quiz Generator for a
-multiplayer game called QuizBattle.
-
-Your task is to generate high-quality multiple-choice
-quiz questions.
-
-QUIZ CONFIGURATION:
-
-Topic:
-${topic}
-
-Difficulty:
-${difficulty}
-
-Number of questions:
-${numberOfQuestions}
-
-Game mode:
-${mode}
-
-Additional user instructions:
-${prompt || 'None'}
-
-STRICT RULES:
-
-1. Generate EXACTLY ${numberOfQuestions} questions.
-
-2. Every question must contain EXACTLY 4 options.
-
-3. Every question must have EXACTLY ONE correct option.
-
-4. correctOptionIndex must be:
-   0 = first option
-   1 = second option
-   2 = third option
-   3 = fourth option
-
-5. Options must be unique.
-
-6. Questions must be unique.
-
-7. Do not use:
-   - All of the above
-   - None of the above
-
-8. Do not create subjective questions.
-
-9. Do not create ambiguous questions.
-
-10. Incorrect options should be plausible.
-
-11. Questions must be factually accurate.
-
-12. Do not put the answer inside the question itself.
-
-13. Do not use markdown.
-
-14. Keep explanations short and factual.
-
-15. The output must contain ONLY the requested JSON.
-
-DIFFICULTY:
-
-EASY:
-- Basic knowledge.
-- Straightforward questions.
-- Suitable for approximately 15 seconds.
-
-MEDIUM:
-- Requires reasonable knowledge or thinking.
-- Suitable for approximately 20 seconds.
-
-HARD:
-- Requires deeper knowledge or reasoning.
-- Suitable for approximately 30 seconds.
-
-QUESTION TYPES:
-
-Use normal competitive MCQ questions.
-
-Do not generate:
-- Yes/No questions.
-- True/False questions.
-- Multiple-correct questions.
-- Subjective questions.
-
-QUALITY:
-
-Before returning the response, internally verify:
-
-- Correct number of questions.
-- Exactly 4 options per question.
-- One correct answer.
-- No duplicate questions.
-- No duplicate options.
-- Correct option index is 0-3.
-`;
-        const userPrompt = `
-Generate the QuizBattle quiz now.
-
-Topic:
-${topic}
-
-Difficulty:
-${difficulty}
-
-Questions:
-${numberOfQuestions}
-
-Mode:
-${mode}
-
-Additional instructions:
-${prompt || 'None'}
-`;
-        const contents = [
-            {
-                role: 'user',
-                parts: [
-                    {
-                        text: systemPrompt + '\n\n' + userPrompt,
-                    },
-                ],
-            },
-        ];
-        const config = {
-            temperature: 0.7,
-            responseMimeType: 'application/json',
-            responseSchema: this.getQuizResponseSchema(),
-        };
-        let lastError = null;
-        for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
-            try {
-                this.logger.debug(`Gemini request attempt ${attempt}/${this.maxRetries}`);
-                const response = await this.generateContentWithTimeout(contents, config);
-                const text = response.text?.trim();
-                if (!text) {
-                    throw new Error('Gemini returned an empty response');
-                }
-                this.logger.debug(`Gemini response received (${text.length} chars)`);
-                let parsed;
-                try {
-                    parsed = JSON.parse(text);
-                }
-                catch {
-                    throw new Error('Gemini returned invalid JSON');
-                }
-                this.validateAIResponse(parsed, numberOfQuestions);
-                return parsed;
-            }
-            catch (error) {
-                lastError = error;
-                const retryable = this.isRetryableError(error);
-                this.logger.warn(`Gemini attempt ${attempt} failed | retryable=${retryable} | error=${this.getErrorMessage(error)}`);
-                if (!retryable) {
-                    break;
-                }
-                if (attempt >= this.maxRetries) {
-                    break;
-                }
-                const delay = this.calculateBackoff(attempt);
-                this.logger.warn(`Retrying Gemini request in ${delay}ms...`);
-                await this.sleep(delay);
-            }
-        }
-        this.logger.error('Gemini quiz generation failed after retries', lastError instanceof Error ? lastError.stack : String(lastError));
-        throw new common_1.InternalServerErrorException('Unable to generate quiz questions right now. Please try again.');
-    }
-    getQuizResponseSchema() {
-        return {
-            type: genai_1.Type.OBJECT,
-            properties: {
-                questions: {
-                    type: genai_1.Type.ARRAY,
-                    items: {
-                        type: genai_1.Type.OBJECT,
-                        properties: {
-                            question: {
-                                type: genai_1.Type.STRING,
-                            },
-                            options: {
-                                type: genai_1.Type.ARRAY,
-                                items: {
-                                    type: genai_1.Type.OBJECT,
-                                    properties: {
-                                        text: {
-                                            type: genai_1.Type.STRING,
-                                        },
-                                    },
-                                    required: ['text'],
-                                },
-                            },
-                            correctOptionIndex: {
-                                type: genai_1.Type.INTEGER,
-                            },
-                            explanation: {
-                                type: genai_1.Type.STRING,
-                            },
-                        },
-                        required: [
-                            'question',
-                            'options',
-                            'correctOptionIndex',
-                            'explanation',
-                        ],
-                    },
-                },
-            },
-            required: ['questions'],
-        };
-    }
-    async generateContentWithTimeout(contents, config) {
-        const request = this.ai.models.generateContent({
-            model: this.model,
-            contents,
-            config,
-        });
-        const timeout = new Promise((_, reject) => {
-            setTimeout(() => {
-                reject(new Error(`Gemini request timed out after ${this.timeoutMs}ms`));
-            }, this.timeoutMs);
-        });
-        return Promise.race([request, timeout]);
-    }
-    isRetryableError(error) {
-        const message = this.getErrorMessage(error).toLowerCase();
-        const status = this.getErrorStatus(error);
-        if (status === 429 || status === 500 || status === 503 || status === 504) {
-            return true;
-        }
-        if (message.includes('unavailable') ||
-            message.includes('overloaded') ||
-            message.includes('high demand') ||
-            message.includes('timeout') ||
-            message.includes('timed out') ||
-            message.includes('econnreset') ||
-            message.includes('socket') ||
-            message.includes('temporarily')) {
-            return true;
-        }
-        return false;
-    }
-    getErrorStatus(error) {
-        return (error?.status ?? error?.code ?? error?.error?.status ?? error?.error?.code);
-    }
-    getErrorMessage(error) {
-        if (error instanceof Error) {
-            return error.message;
-        }
-        if (typeof error === 'string') {
-            return error;
-        }
-        try {
-            return JSON.stringify(error);
-        }
-        catch {
-            return String(error);
-        }
-    }
-    calculateBackoff(attempt) {
-        const base = 1000 * Math.pow(2, attempt - 1);
-        const jitter = Math.floor(Math.random() * 500);
-        return Math.min(base + jitter, 8000);
-    }
-    sleep(milliseconds) {
-        return new Promise((resolve) => setTimeout(resolve, milliseconds));
-    }
-    validateAIResponse(response, expectedCount) {
-        if (!response || !Array.isArray(response.questions)) {
-            throw new Error('Invalid AI quiz response');
-        }
-        if (response.questions.length !== expectedCount) {
-            throw new Error(`Expected ${expectedCount} questions but received ${response.questions.length}`);
-        }
-        const questionTexts = new Set();
-        for (let i = 0; i < response.questions.length; i++) {
-            const question = response.questions[i];
-            if (!question ||
-                typeof question.question !== 'string' ||
-                !question.question.trim()) {
-                throw new Error(`Question ${i + 1} has invalid text`);
-            }
-            const normalizedQuestion = this.normalizeText(question.question);
-            if (questionTexts.has(normalizedQuestion)) {
-                throw new Error(`Duplicate question detected at index ${i}`);
-            }
-            questionTexts.add(normalizedQuestion);
-            if (!Array.isArray(question.options) || question.options.length !== 4) {
-                throw new Error(`Question ${i + 1} must contain exactly 4 options`);
-            }
-            const optionTexts = question.options.map((option) => option?.text?.trim().toLowerCase());
-            if (optionTexts.some((text) => !text)) {
-                throw new Error(`Question ${i + 1} contains an empty option`);
-            }
-            if (new Set(optionTexts).size !== 4) {
-                throw new Error(`Question ${i + 1} contains duplicate options`);
-            }
-            if (!Number.isInteger(question.correctOptionIndex) ||
-                question.correctOptionIndex < 0 ||
-                question.correctOptionIndex > 3) {
-                throw new Error(`Question ${i + 1} has invalid correctOptionIndex`);
-            }
-            if (typeof question.explanation !== 'string' ||
-                !question.explanation.trim()) {
-                throw new Error(`Question ${i + 1} has invalid explanation`);
-            }
-        }
-    }
-    normalizeText(value) {
-        return value.trim().toLowerCase().replace(/\s+/g, ' ');
-    }
-    transformQuestions(aiQuestions, context) {
-        return aiQuestions.map((question, index) => {
-            const questionId = this.createQuestionId();
-            const options = question.options.map((option, optionIndex) => ({
-                id: `${questionId}-option-${optionIndex + 1}`,
-                text: option.text.trim(),
-            }));
-            const correctOptionId = options[question.correctOptionIndex]?.id;
-            if (!correctOptionId) {
-                throw new Error(`Invalid correct option for question ${index + 1}`);
-            }
-            const timeLimitSeconds = this.getTimeLimit(context.difficulty);
-            const points = this.getPoints(context.difficulty);
-            return {
-                id: questionId,
-                index,
-                type: 'MCQ',
-                difficulty: context.difficulty,
-                topic: context.topic,
-                question: question.question.trim(),
-                media: null,
-                options,
-                correctOptionId,
-                points,
-                timeLimitSeconds,
-                status: 'PENDING',
-                startedAt: undefined,
-                endsAt: undefined,
-                explanation: question.explanation.trim(),
-                stats: {
-                    totalAnswered: 0,
-                    correctCount: 0,
-                    optionDistribution: Object.fromEntries(options.map((option) => [option.id, 0])),
-                },
-            };
-        });
-    }
-    getTimeLimit(difficulty) {
-        switch (difficulty.toUpperCase()) {
-            case 'EASY':
-                return 15;
-            case 'MEDIUM':
-                return 20;
-            case 'HARD':
-                return 30;
-            default:
-                return 20;
-        }
-    }
-    getPoints(difficulty) {
-        switch (difficulty.toUpperCase()) {
-            case 'EASY':
-                return 10;
-            case 'MEDIUM':
-                return 20;
-            case 'HARD':
-                return 30;
-            default:
-                return 10;
-        }
-    }
-    normalizeQuestionCount(count) {
-        if (!Number.isFinite(count)) {
-            return 5;
-        }
-        return Math.min(Math.max(Math.floor(count), 1), 50);
-    }
-    normalizeDifficulty(difficulty) {
-        const normalized = difficulty?.trim().toUpperCase();
-        if (['EASY', 'MEDIUM', 'HARD'].includes(normalized)) {
-            return normalized;
-        }
-        return 'MEDIUM';
-    }
-    parseNumber(value, fallback) {
-        const parsed = Number(value);
-        if (!Number.isFinite(parsed) || parsed <= 0) {
-            return fallback;
-        }
-        return parsed;
-    }
-    createQuestionId() {
-        return `q_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-    }
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
 };
-exports.QuizBattleQuestionService = QuizBattleQuestionService;
-exports.QuizBattleQuestionService = QuizBattleQuestionService = QuizBattleQuestionService_1 = __decorate([
-    (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [])
-], QuizBattleQuestionService);
-
-
-/***/ }),
-/* 19 */
-/***/ ((module) => {
-
-module.exports = require("@google/genai");
-
-/***/ }),
-/* 20 */
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
-
-
-var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
-    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
-    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
-    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
-    return c > 3 && r && Object.defineProperty(target, key, r), r;
-};
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.QuizBattleRankingService = void 0;
-const common_1 = __webpack_require__(3);
-let QuizBattleRankingService = class QuizBattleRankingService {
-    updateRanking(session) {
-        const users = [...session.users.values()]
-            .filter((user) => user.status !== 'LEFT')
-            .sort((a, b) => {
-            if (b.score !== a.score) {
-                return b.score - a.score;
-            }
-            if (b.correctAnswers !== a.correctAnswers) {
-                return b.correctAnswers - a.correctAnswers;
-            }
-            if (b.answeredQuestions !== a.answeredQuestions) {
-                return b.answeredQuestions - a.answeredQuestions;
-            }
-            return a.joinedAt - b.joinedAt;
-        });
-        const rankings = users.map((user, index) => {
-            user.rank = index + 1;
-            return {
-                userId: user.userId,
-                username: user.username,
-                avatar: user.avatar,
-                avatarId: user.avatarId,
-                score: user.score,
-                correctAnswers: user.correctAnswers,
-                answeredQuestions: user.answeredQuestions,
-                rank: user.rank,
-                status: user.status,
-            };
-        });
-        session.ranking = {
-            roomId: session.room.roomId,
-            rankings,
-            updatedAt: Date.now(),
-        };
-    }
-    getRanking(session) {
-        return session.ranking;
-    }
-};
-exports.QuizBattleRankingService = QuizBattleRankingService;
-exports.QuizBattleRankingService = QuizBattleRankingService = __decorate([
-    (0, common_1.Injectable)()
-], QuizBattleRankingService);
-
-
-/***/ }),
-/* 21 */
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
-
-
-var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
-    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
-    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
-    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
-    return c > 3 && r && Object.defineProperty(target, key, r), r;
-};
-var __metadata = (this && this.__metadata) || function (k, v) {
-    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
-};
-var PlayerGameStateService_1;
+var RedisService_1;
 var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.PlayerGameStateService = void 0;
-const common_1 = __webpack_require__(3);
-const redis_1 = __webpack_require__(6);
-let PlayerGameStateService = PlayerGameStateService_1 = class PlayerGameStateService {
-    redisService;
-    logger = new common_1.Logger(PlayerGameStateService_1.name);
-    KEY = 'game:players:room';
-    constructor(redisService) {
-        this.redisService = redisService;
-    }
-    async enterGame(userId, roomId) {
-        const existingRoomId = await this.getRoomId(userId);
-        if (existingRoomId === roomId) {
-            return true;
-        }
-        if (existingRoomId) {
-            return false;
-        }
-        await this.redisService.client.hset(this.KEY, userId, roomId);
-        return true;
-    }
-    async startGame(roomId, gameDuration = 1000 * 60 * 10) {
-        const key = `game:room:${roomId}:expiration`;
-        const result = await this.redisService.client.set(key, Date.now().toString(), 'PX', gameDuration, 'NX');
-        return result === 'OK';
-    }
-    async getRoomId(userId) {
-        return this.redisService.client.hget(this.KEY, userId);
-    }
-    async isInGame(userId) {
-        const roomId = await this.getRoomId(userId);
-        return roomId !== null;
-    }
-    async leaveGame(userId) {
-        const removed = await this.redisService.client.hdel(this.KEY, userId);
-        return removed === 1;
-    }
-    async getAllPlayers() {
-        return this.redisService.client.hgetall(this.KEY);
-    }
-    async getPlayersInRoom(roomId) {
-        const players = await this.getAllPlayers();
-        return Object.entries(players)
-            .filter(([, playerRoomId]) => playerRoomId === roomId)
-            .map(([userId]) => userId);
-    }
-};
-exports.PlayerGameStateService = PlayerGameStateService;
-exports.PlayerGameStateService = PlayerGameStateService = PlayerGameStateService_1 = __decorate([
-    (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [typeof (_a = typeof redis_1.RedisService !== "undefined" && redis_1.RedisService) === "function" ? _a : Object])
-], PlayerGameStateService);
-
-
-/***/ }),
-/* 22 */
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
-
-
-var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
-    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
-    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
-    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
-    return c > 3 && r && Object.defineProperty(target, key, r), r;
-};
-var __metadata = (this && this.__metadata) || function (k, v) {
-    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
-};
-var __param = (this && this.__param) || function (paramIndex, decorator) {
-    return function (target, key) { decorator(target, key, paramIndex); }
-};
-var EventsGateway_1;
-var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l;
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.EventsGateway = void 0;
-const websockets_1 = __webpack_require__(23);
-const common_1 = __webpack_require__(3);
-const socket_io_1 = __webpack_require__(24);
-const events_service_1 = __webpack_require__(25);
-const quiz_battle_service_service_1 = __webpack_require__(5);
-let EventsGateway = EventsGateway_1 = class EventsGateway {
-    eventsService;
-    quizBattleService;
-    logger = new common_1.Logger(EventsGateway_1.name);
-    server;
-    constructor(eventsService, quizBattleService) {
-        this.eventsService = eventsService;
-        this.quizBattleService = quizBattleService;
-    }
-    afterInit(server) {
-        this.eventsService.setSocket(server);
-        this.logger.log('Socket.IO server initialized');
-    }
-    async handleError(message, client) {
-        this.server.to(client.id).emit('battle:error', {
-            success: false,
-            message: message,
-        });
-    }
-    async handleConnection(client) {
-        this.logger.log(`Client connected: ${client.id}`);
-        try {
-            const user = this.eventsService.extractUserFromSocket(client);
-            if (!user) {
-                this.handleError(`Invalid user information for client: ${client.id}`, client);
-                client.disconnect(true);
-                return;
-            }
-            await this.eventsService.registerSocket(client, user);
-            client.emit('connected', {
-                success: true,
-                socketId: client.id,
-                userId: user.id,
-            });
-            await this.quizBattleService.checkReconnectGame(user.id, Date.now(), (state) => {
-                client.emit('battle:reconnect-response', state);
-            }, (errorMessage) => {
-                this.handleError(errorMessage, client);
-            });
-            this.logger.log(`User connected | ${user.username} | ${user.id} | ${client.id}`);
-        }
-        catch (error) {
-            this.logger.error(`Connection failed | ${client.id}`, error instanceof Error ? error.stack : String(error));
-            client.disconnect(true);
-        }
-    }
-    async handleDisconnect(client) {
-        this.logger.log(`Client disconnected: ${client.id}`);
-        await this.eventsService.unregisterSocket(client);
-    }
-    async sendErrorAll() {
-        this.server.emit('battle:error', {
-            success: false,
-            message: 'An error occurred while processing the request',
-        });
-    }
-    handleCreateRoom(client, data) {
-        const user = this.eventsService.extractUserFromSocket(client);
-        if (!user) {
-            this.logger.warn(`Invalid user information for client: ${client.id}`);
-            this.handleError(`An error occurred while creating the room`, client);
-            return;
-        }
-        setTimeout(() => {
-            this.quizBattleService.createRoom({
-                aiId: data.aiModelId,
-                mode: data.gameMode,
-                difficulty: data.difficulty,
-                visibility: data.isPrivate ? 'private' : 'public',
-                maxPlayers: data.playerCount,
-                topic: data.topic,
-                prompt: '',
-                host: {
-                    userId: user.id,
-                    username: user.username,
-                    avatar: user.avatar,
-                    avatarId: user.avatarId,
-                },
-                numberOfQuestions: data.questionCount,
-                totalTimeSeconds: data.secondsPerQuestion * data.questionCount,
-            }, (state) => {
-                this.server.to(client.id).emit('battle:lobby', state);
-            }, (errorMessage) => {
-                this.handleError(errorMessage, client);
-            });
-        }, 1000);
-    }
-    handleJoinRoom(client, data) {
-        const user = this.eventsService.extractUserFromSocket(client);
-        if (!user) {
-            this.logger.warn(`Invalid user information for client: ${client.id}`);
-            this.handleError('An error occurred while joining the room', client);
-            return;
-        }
-        this.quizBattleService.joinRoom(data.roomId, {
-            userId: user?.id,
-            username: user?.username,
-            avatar: user?.avatar,
-            avatarId: user?.avatarId,
-        }, async (state) => {
-            const socketIds = (await this.eventsService.findSocketIdsByUserIds(state.players.map((p) => p.userId))).filter((id) => id !== user.id);
-            this.server.to(socketIds).emit('battle:lobby', state);
-            client.emit('battle:joined-response', state);
-        }, (errorMessage) => {
-            this.handleError(errorMessage, client);
-        });
-    }
-    handleReady(client, data) {
-        const user = this.eventsService.extractUserFromSocket(client);
-        if (!user) {
-            this.logger.warn(`Invalid user information for client: ${client.id}`);
-            this.handleError(`An error occurred while setting ready status`, client);
-            return;
-        }
-        this.quizBattleService.setPlayerReady({
-            roomId: data.roomId,
-            userId: user.id,
-            ready: data.ready,
-        }, async (state) => {
-            const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map((p) => p.userId));
-            this.server.to(socketIds).emit('battle:lobby-updated', state);
-        }, (errorMessage) => {
-            this.handleError(errorMessage, client);
-        });
-    }
-    handleStart(client, data) {
-        const user = this.eventsService.extractUserFromSocket(client);
-        if (!user) {
-            this.logger.warn(`Invalid user information for client: ${client.id}`);
-            this.handleError(`An error occurred while starting the match`, client);
-            return;
-        }
-        this.quizBattleService.startMatch({
-            roomId: data.roomId,
-            userId: user.id,
-        }, async (state) => {
-            const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map((p) => p.userId));
-            this.server.to(socketIds).emit('battle:game-start', state);
-        }, (errorMessage) => {
-            this.handleError(errorMessage, client);
-        });
-    }
-    handleLeave(client, data) {
-        const user = this.eventsService.extractUserFromSocket(client);
-        if (!user) {
-            this.logger.warn(`Invalid user information for client: ${client.id}`);
-            this.handleError(`An error occurred while leaving the match`, client);
-            return;
-        }
-        this.quizBattleService.leaveRoom({
-            roomId: data.roomId,
-            userId: user.id,
-        }, async (state) => {
-            const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map((player) => player.userId));
-            this.server.to(socketIds).emit('battle:player-left', state);
-        }, (errorMessage) => {
-            this.handleError(errorMessage, client);
-        });
-    }
-    handleReconnect(client) {
-        const user = this.eventsService.extractUserFromSocket(client);
-        if (!user) {
-            this.logger.warn(`Invalid user information for client: ${client.id}`);
-            this.handleError(`An error occurred while reconnecting`, client);
-            return;
-        }
-        this.quizBattleService.reconnectGame(user.id, Date.now(), (state) => {
-            client.emit('battle:game-start', state);
-        }, (errorMessage) => {
-            this.handleError(errorMessage, client);
-        });
-    }
-    handleAnswer(client, data) {
-        const user = this.eventsService.extractUserFromSocket(client);
-        if (!user) {
-            this.logger.warn(`Invalid user information for client: ${client.id}`);
-            this.handleError(`An error occurred while submitting an answer`, client);
-            return;
-        }
-        this.quizBattleService.answerAttempt({
-            roomId: data.roomId,
-            userId: user.id,
-            qId: data.qId,
-            oId: data.oId,
-        }, async (state) => {
-            const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map((player) => player.userId));
-            this.server.to(socketIds).emit('battle:lobby-updated', state);
-        }, (errorMessage) => {
-            this.handleError(errorMessage, client);
-        });
-    }
-};
-exports.EventsGateway = EventsGateway;
-__decorate([
-    (0, websockets_1.WebSocketServer)(),
-    __metadata("design:type", typeof (_c = typeof socket_io_1.Server !== "undefined" && socket_io_1.Server) === "function" ? _c : Object)
-], EventsGateway.prototype, "server", void 0);
-__decorate([
-    (0, websockets_1.SubscribeMessage)('test:error'),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", []),
-    __metadata("design:returntype", typeof (_d = typeof Promise !== "undefined" && Promise) === "function" ? _d : Object)
-], EventsGateway.prototype, "sendErrorAll", null);
-__decorate([
-    (0, websockets_1.SubscribeMessage)('battle:create'),
-    __param(0, (0, websockets_1.ConnectedSocket)()),
-    __param(1, (0, websockets_1.MessageBody)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [typeof (_e = typeof socket_io_1.Socket !== "undefined" && socket_io_1.Socket) === "function" ? _e : Object, Object]),
-    __metadata("design:returntype", void 0)
-], EventsGateway.prototype, "handleCreateRoom", null);
-__decorate([
-    (0, websockets_1.SubscribeMessage)('battle:join'),
-    __param(0, (0, websockets_1.ConnectedSocket)()),
-    __param(1, (0, websockets_1.MessageBody)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [typeof (_f = typeof socket_io_1.Socket !== "undefined" && socket_io_1.Socket) === "function" ? _f : Object, Object]),
-    __metadata("design:returntype", void 0)
-], EventsGateway.prototype, "handleJoinRoom", null);
-__decorate([
-    (0, websockets_1.SubscribeMessage)('battle:ready'),
-    __param(0, (0, websockets_1.ConnectedSocket)()),
-    __param(1, (0, websockets_1.MessageBody)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [typeof (_g = typeof socket_io_1.Socket !== "undefined" && socket_io_1.Socket) === "function" ? _g : Object, Object]),
-    __metadata("design:returntype", void 0)
-], EventsGateway.prototype, "handleReady", null);
-__decorate([
-    (0, websockets_1.SubscribeMessage)('battle:game-start'),
-    __param(0, (0, websockets_1.ConnectedSocket)()),
-    __param(1, (0, websockets_1.MessageBody)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [typeof (_h = typeof socket_io_1.Socket !== "undefined" && socket_io_1.Socket) === "function" ? _h : Object, Object]),
-    __metadata("design:returntype", void 0)
-], EventsGateway.prototype, "handleStart", null);
-__decorate([
-    (0, websockets_1.SubscribeMessage)('battle:leave'),
-    __param(0, (0, websockets_1.ConnectedSocket)()),
-    __param(1, (0, websockets_1.MessageBody)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [typeof (_j = typeof socket_io_1.Socket !== "undefined" && socket_io_1.Socket) === "function" ? _j : Object, Object]),
-    __metadata("design:returntype", void 0)
-], EventsGateway.prototype, "handleLeave", null);
-__decorate([
-    (0, websockets_1.SubscribeMessage)('battle:reconnect'),
-    __param(0, (0, websockets_1.ConnectedSocket)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [typeof (_k = typeof socket_io_1.Socket !== "undefined" && socket_io_1.Socket) === "function" ? _k : Object]),
-    __metadata("design:returntype", void 0)
-], EventsGateway.prototype, "handleReconnect", null);
-__decorate([
-    (0, websockets_1.SubscribeMessage)('battle:answer'),
-    __param(0, (0, websockets_1.ConnectedSocket)()),
-    __param(1, (0, websockets_1.MessageBody)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [typeof (_l = typeof socket_io_1.Socket !== "undefined" && socket_io_1.Socket) === "function" ? _l : Object, Object]),
-    __metadata("design:returntype", void 0)
-], EventsGateway.prototype, "handleAnswer", null);
-exports.EventsGateway = EventsGateway = EventsGateway_1 = __decorate([
-    (0, websockets_1.WebSocketGateway)({
-        namespace: '/event',
-        cors: {
-            origin: true,
-            credentials: true,
-        },
-        transports: ['websocket'],
-    }),
-    (0, common_1.UsePipes)(new common_1.ValidationPipe({
-        whitelist: true,
-        transform: true,
-    })),
-    __metadata("design:paramtypes", [typeof (_a = typeof events_service_1.EventsService !== "undefined" && events_service_1.EventsService) === "function" ? _a : Object, typeof (_b = typeof quiz_battle_service_service_1.QuizBattleService !== "undefined" && quiz_battle_service_service_1.QuizBattleService) === "function" ? _b : Object])
-], EventsGateway);
-
-
-/***/ }),
-/* 23 */
-/***/ ((module) => {
-
-module.exports = require("@nestjs/websockets");
-
-/***/ }),
-/* 24 */
-/***/ ((module) => {
-
-module.exports = require("socket.io");
-
-/***/ }),
-/* 25 */
-/***/ (function(__unused_webpack_module, exports, __webpack_require__) {
-
-
-var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
-    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
-    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
-    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
-    return c > 3 && r && Object.defineProperty(target, key, r), r;
-};
-var __metadata = (this && this.__metadata) || function (k, v) {
-    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
-};
-var EventsService_1;
-var _a;
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.EventsService = void 0;
-const redis_1 = __webpack_require__(6);
-const common_1 = __webpack_require__(3);
-let EventsService = EventsService_1 = class EventsService {
-    redisService;
-    logger = new common_1.Logger(EventsService_1.name);
-    server;
-    socketKey = 'SOCKET:CLIENTS';
-    constructor(redisService) {
-        this.redisService = redisService;
-    }
-    setSocket(server) {
-        this.server = server;
-        this.logger.log('Socket.IO server registered in EventsService');
-    }
-    extractUserFromSocket(client) {
-        const { id, username, avatar, avatarId } = client.handshake.query;
-        if (typeof id !== 'string' || !id.trim()) {
-            this.logger.warn(`Missing user id | socket=${client.id}`);
-            return null;
-        }
-        if (typeof username !== 'string' || !username.trim()) {
-            this.logger.warn(`Missing username | socket=${client.id}`);
-            return null;
-        }
-        return {
-            id,
-            username,
-            avatar: typeof avatar === 'string' ? avatar : undefined,
-            avatarId: typeof avatarId === 'string' ? avatarId : undefined,
-        };
-    }
-    async registerSocket(client, user) {
-        await this.redisService.client.hset(this.socketKey, user.id, client.id);
-        this.logger.log(`Redis socket registered | user=${user.id} socket=${client.id}`);
-    }
-    async unregisterSocket(client) {
-        const user = this.extractUserFromSocket(client);
-        if (!user) {
-            return;
-        }
-        const currentSocketId = await this.redisService.client.hget(this.socketKey, user.id);
-        if (currentSocketId !== client.id) {
-            this.logger.debug(`Skipping Redis cleanup because socket was replaced | user=${user.id}`);
-            return;
-        }
-        await this.redisService.client.hdel(this.socketKey, user.id);
-        this.logger.log(`Redis socket removed | user=${user.id} socket=${client.id}`);
-    }
-    async getSocketIdByUserId(userId) {
-        if (typeof userId !== 'string' || !userId.trim()) {
-            return null;
-        }
-        const socketId = await this.redisService.client.hget(this.socketKey, userId);
-        return socketId ?? null;
-    }
-    async findSocketIdsByUserIds(userIds) {
-        if (!userIds?.length) {
-            return [];
-        }
-        const uniqueUserIds = [
-            ...new Set(userIds.filter((id) => typeof id === 'string' && id.trim().length > 0)),
-        ];
-        if (!uniqueUserIds.length) {
-            return [];
-        }
-        const socketIds = await Promise.all(uniqueUserIds.map((userId) => this.redisService.client.hget(this.socketKey, userId)));
-        return socketIds.filter((socketId) => typeof socketId === 'string' && socketId.length > 0);
-    }
-    async sendMessageToUsers(userIds, data) {
-        if (!this.server) {
-            this.logger.warn('Socket.IO server is not initialized');
-            return;
-        }
-        const socketIds = await this.findSocketIdsByUserIds(userIds);
-        if (!socketIds.length) {
-            this.logger.debug(`No online users found for message`);
-            return;
-        }
-        this.server.to(socketIds).emit('message-activity', {
-            message: data.message,
-            senderSocketId: data.senderSocketId,
-        });
-        this.logger.debug(`Message sent to ${socketIds.length} socket(s)`);
-    }
-};
-exports.EventsService = EventsService;
-exports.EventsService = EventsService = EventsService_1 = __decorate([
-    (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [typeof (_a = typeof redis_1.RedisService !== "undefined" && redis_1.RedisService) === "function" ? _a : Object])
-], EventsService);
-
-
-/***/ }),
-/* 26 */
-/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
-
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.RedisIoAdapter = void 0;
-const platform_socket_io_1 = __webpack_require__(27);
-const redis_adapter_1 = __webpack_require__(28);
-const redis_1 = __webpack_require__(29);
-const common_1 = __webpack_require__(3);
-class RedisIoAdapter extends platform_socket_io_1.IoAdapter {
-    logger = new common_1.Logger(RedisIoAdapter.name);
-    adapterConstructor;
-    pubClient;
-    subClient;
-    async connectToRedis() {
-        const redisUrl = process.env.REDIS_URL;
+exports.RedisService = void 0;
+const config_1 = __webpack_require__(/*! @app/config */ "./libs/config/src/index.ts");
+const common_1 = __webpack_require__(/*! @nestjs/common */ "@nestjs/common");
+const ioredis_1 = __importDefault(__webpack_require__(/*! ioredis */ "ioredis"));
+let RedisService = RedisService_1 = class RedisService {
+    configService;
+    client;
+    logger = new common_1.Logger(RedisService_1.name);
+    constructor(configService) {
+        this.configService = configService;
+        const redisUrl = this.configService.getEnv('REDIS_URL');
         if (!redisUrl) {
-            throw new Error('REDIS_URL is not defined');
+            throw new Error('REDIS_URL environment variable is not defined');
         }
-        this.pubClient = (0, redis_1.createClient)({
-            url: redisUrl,
-        });
-        this.subClient = this.pubClient.duplicate();
-        this.pubClient.on('error', (error) => {
-            this.logger.error('[Redis Pub] Error:', error);
-        });
-        this.subClient.on('error', (error) => {
-            this.logger.error('[Redis Sub] Error:', error);
-        });
-        await Promise.all([this.pubClient.connect(), this.subClient.connect()]);
-        this.adapterConstructor = (0, redis_adapter_1.createAdapter)(this.pubClient, this.subClient);
-        this.logger.log('Redis Socket.IO adapter connected');
+        this.client = new ioredis_1.default(redisUrl);
     }
-    createIOServer(port, options) {
-        const server = super.createIOServer(port, options);
-        if (!this.adapterConstructor) {
-            throw new Error('Redis adapter is not initialized');
+    async onModuleInit() {
+        await this.client.config('SET', 'notify-keyspace-events', 'Ex');
+        this.logger.log('Redis key expiration notifications enabled');
+    }
+    async onModuleDestroy() {
+        await this.client.quit();
+    }
+    async get(key) {
+        const value = await this.client.get(key);
+        if (!value) {
+            return null;
         }
-        server.adapter(this.adapterConstructor);
-        return server;
+        return JSON.parse(value);
     }
-    async close() {
-        await Promise.all([this.pubClient?.quit(), this.subClient?.quit()]);
+    async set(key, value, ttl) {
+        const data = JSON.stringify(value);
+        if (ttl) {
+            await this.client.set(key, data, 'EX', ttl);
+            return;
+        }
+        await this.client.set(key, data);
     }
-}
-exports.RedisIoAdapter = RedisIoAdapter;
+    async delete(key) {
+        await this.client.del(key);
+    }
+    async exists(key) {
+        return this.client.exists(key);
+    }
+};
+exports.RedisService = RedisService;
+exports.RedisService = RedisService = RedisService_1 = __decorate([
+    (0, common_1.Injectable)(),
+    __metadata("design:paramtypes", [typeof (_a = typeof config_1.ConfigService !== "undefined" && config_1.ConfigService) === "function" ? _a : Object])
+], RedisService);
 
 
-/***/ }),
-/* 27 */
-/***/ ((module) => {
+/***/ },
 
-module.exports = require("@nestjs/platform-socket.io");
+/***/ "@nestjs/common"
+/*!*********************************!*\
+  !*** external "@nestjs/common" ***!
+  \*********************************/
+(module) {
 
-/***/ }),
-/* 28 */
-/***/ ((module) => {
+module.exports = require("@nestjs/common");
 
-module.exports = require("@socket.io/redis-adapter");
+/***/ },
 
-/***/ }),
-/* 29 */
-/***/ ((module) => {
-
-module.exports = require("redis");
-
-/***/ }),
-/* 30 */
-/***/ ((module) => {
+/***/ "@nestjs/common/services"
+/*!******************************************!*\
+  !*** external "@nestjs/common/services" ***!
+  \******************************************/
+(module) {
 
 module.exports = require("@nestjs/common/services");
 
-/***/ })
-/******/ 	]);
+/***/ },
+
+/***/ "@nestjs/config"
+/*!*********************************!*\
+  !*** external "@nestjs/config" ***!
+  \*********************************/
+(module) {
+
+module.exports = require("@nestjs/config");
+
+/***/ },
+
+/***/ "@nestjs/core"
+/*!*******************************!*\
+  !*** external "@nestjs/core" ***!
+  \*******************************/
+(module) {
+
+module.exports = require("@nestjs/core");
+
+/***/ },
+
+/***/ "@nestjs/platform-socket.io"
+/*!*********************************************!*\
+  !*** external "@nestjs/platform-socket.io" ***!
+  \*********************************************/
+(module) {
+
+module.exports = require("@nestjs/platform-socket.io");
+
+/***/ },
+
+/***/ "@nestjs/websockets"
+/*!*************************************!*\
+  !*** external "@nestjs/websockets" ***!
+  \*************************************/
+(module) {
+
+module.exports = require("@nestjs/websockets");
+
+/***/ },
+
+/***/ "@socket.io/redis-adapter"
+/*!*******************************************!*\
+  !*** external "@socket.io/redis-adapter" ***!
+  \*******************************************/
+(module) {
+
+module.exports = require("@socket.io/redis-adapter");
+
+/***/ },
+
+/***/ "class-validator"
+/*!**********************************!*\
+  !*** external "class-validator" ***!
+  \**********************************/
+(module) {
+
+module.exports = require("class-validator");
+
+/***/ },
+
+/***/ "ioredis"
+/*!**************************!*\
+  !*** external "ioredis" ***!
+  \**************************/
+(module) {
+
+module.exports = require("ioredis");
+
+/***/ },
+
+/***/ "openai"
+/*!*************************!*\
+  !*** external "openai" ***!
+  \*************************/
+(module) {
+
+module.exports = require("openai");
+
+/***/ },
+
+/***/ "redis"
+/*!************************!*\
+  !*** external "redis" ***!
+  \************************/
+(module) {
+
+module.exports = require("redis");
+
+/***/ },
+
+/***/ "socket.io"
+/*!****************************!*\
+  !*** external "socket.io" ***!
+  \****************************/
+(module) {
+
+module.exports = require("socket.io");
+
+/***/ },
+
+/***/ "child_process"
+/*!********************************!*\
+  !*** external "child_process" ***!
+  \********************************/
+(module) {
+
+module.exports = require("child_process");
+
+/***/ },
+
+/***/ "fs"
+/*!*********************!*\
+  !*** external "fs" ***!
+  \*********************/
+(module) {
+
+module.exports = require("fs");
+
+/***/ },
+
+/***/ "path"
+/*!***********************!*\
+  !*** external "path" ***!
+  \***********************/
+(module) {
+
+module.exports = require("path");
+
+/***/ }
+
+/******/ 	});
 /************************************************************************/
 /******/ 	// The module cache
 /******/ 	var __webpack_module_cache__ = {};
@@ -2316,6 +2879,12 @@ module.exports = require("@nestjs/common/services");
 /******/ 		};
 /******/ 	
 /******/ 		// Execute the module function
+/******/ 		if (!(moduleId in __webpack_modules__)) {
+/******/ 			delete __webpack_module_cache__[moduleId];
+/******/ 			var e = new Error("Cannot find module '" + moduleId + "'");
+/******/ 			e.code = 'MODULE_NOT_FOUND';
+/******/ 			throw e;
+/******/ 		}
 /******/ 		__webpack_modules__[moduleId].call(module.exports, module, module.exports, __webpack_require__);
 /******/ 	
 /******/ 		// Return the exports of the module
@@ -2327,12 +2896,15 @@ var __webpack_exports__ = {};
 // This entry needs to be wrapped in an IIFE because it needs to be isolated against other modules in the chunk.
 (() => {
 var exports = __webpack_exports__;
+/*!**********************************************!*\
+  !*** ./apps/quiz-battle-service/src/main.ts ***!
+  \**********************************************/
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const core_1 = __webpack_require__(1);
-const quiz_battle_service_module_1 = __webpack_require__(2);
-const RedisIoAdapter_1 = __webpack_require__(26);
-const services_1 = __webpack_require__(30);
+const core_1 = __webpack_require__(/*! @nestjs/core */ "@nestjs/core");
+const quiz_battle_service_module_1 = __webpack_require__(/*! ./quiz-battle-service.module */ "./apps/quiz-battle-service/src/quiz-battle-service.module.ts");
+const RedisIoAdapter_1 = __webpack_require__(/*! ./events/RedisIoAdapter */ "./apps/quiz-battle-service/src/events/RedisIoAdapter.ts");
+const services_1 = __webpack_require__(/*! @nestjs/common/services */ "@nestjs/common/services");
 async function bootstrap() {
     const app = await core_1.NestFactory.create(quiz_battle_service_module_1.QuizBattleServiceModule);
     app.enableCors({

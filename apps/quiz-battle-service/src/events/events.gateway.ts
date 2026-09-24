@@ -1,4 +1,5 @@
 import {
+  Ack,
   ConnectedSocket,
   MessageBody,
   SubscribeMessage,
@@ -9,6 +10,14 @@ import { Logger, UsePipes, ValidationPipe } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { EventsService } from './events.service';
 import { QuizBattleService } from '../quiz-battle-service.service';
+import { AckResponse } from '../interface/room-session.interface';
+import {
+  AnswerDto,
+  CreateRoomDto,
+  JoinRoomDto,
+  ReadyDto,
+  RoomIdDto,
+} from '../interface/battle.dto';
 
 @WebSocketGateway({
   namespace: '/event',
@@ -19,6 +28,12 @@ import { QuizBattleService } from '../quiz-battle-service.service';
   },
 
   transports: ['websocket'],
+
+  // Tighter heartbeat/connect tuning to reduce false "disconnected" reads
+  // and surface dead connections faster instead of hanging.
+  pingInterval: 25000,
+  pingTimeout: 20000,
+  connectTimeout: 15000,
 })
 @UsePipes(
   new ValidationPipe({
@@ -40,6 +55,23 @@ export class EventsGateway {
   afterInit(server: Server): void {
     this.eventsService.setSocket(server);
 
+    const rootServer: any = (server as any).server ?? server;
+    const engine = rootServer?.engine;
+
+    if (engine?.on) {
+      engine.on('connection_error', (err: any) => {
+        this.logger.warn(
+          `WebSocket connection error | code=${err?.code} message=${err?.message} context=${JSON.stringify(
+            err?.context ?? {},
+          )}`,
+        );
+      });
+    } else {
+      this.logger.warn(
+        'Could not attach engine.io connection_error listener (engine not found on server instance)',
+      );
+    }
+
     this.logger.log('Socket.IO server initialized');
   }
 
@@ -53,11 +85,19 @@ export class EventsGateway {
   async handleConnection(client: Socket): Promise<void> {
     this.logger.log(`Client connected: ${client.id}`);
 
+    // Defensive per-socket error logging - an unhandled 'error' event on a
+    // socket can otherwise be swallowed and just looks like a silent drop.
+    client.on('error', (err) => {
+      this.logger.warn(
+        `Socket error | socket=${client.id} | ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+
     try {
       const user = this.eventsService.extractUserFromSocket(client);
 
       if (!user) {
-        this.handleError(
+        await this.handleError(
           `Invalid user information for client: ${client.id}`,
           client,
         );
@@ -102,15 +142,15 @@ export class EventsGateway {
   async handleDisconnect(client: Socket): Promise<void> {
     this.logger.log(`Client disconnected: ${client.id}`);
 
-    await this.eventsService.unregisterSocket(client);
-  }
+    // IMPORTANT: extract the user BEFORE unregistering, and BEFORE the
+    // registry cleanup can race with a reconnect on another socket.
+    const user = this.eventsService.extractUserFromSocket(client);
 
-  @SubscribeMessage('test:error')
-  async sendErrorAll(): Promise<void> {
-    this.server.emit('battle:error', {
-      success: false,
-      message: 'An error occurred while processing the request',
-    });
+    await this.eventsService.unregisterSocket(client);
+
+    if (!user) return;
+
+    await this.quizBattleService.handleSocketDisconnect(user.id);
   }
 
   @SubscribeMessage('battle:create')
@@ -118,71 +158,93 @@ export class EventsGateway {
     @ConnectedSocket()
     client: Socket,
 
+    @Ack()
+    ack: (response: AckResponse) => void,
+
     @MessageBody()
-    data: {
-      topic: string;
-      aiModelId: string;
-      aiBackendId: string;
-      gameMode: string;
-      playerCount: number;
-      difficulty: string;
-      questionCount: number;
-      secondsPerQuestion: number;
-      isPrivate: boolean;
-    },
+    data: CreateRoomDto,
   ) {
     const user = this.eventsService.extractUserFromSocket(client);
 
     if (!user) {
       this.logger.warn(`Invalid user information for client: ${client.id}`);
-      this.handleError(`An error occurred while creating the room`, client);
+      ack({
+        success: false,
+        status: 'NOT_FOUND',
+        message: 'An error occurred while creating the room',
+        requestId: data.requestId,
+        serverTime: Date.now(),
+      });
       return;
     }
 
-    setTimeout(() => {
-      this.quizBattleService.createRoom(
-        {
-          aiId: data.aiModelId,
-          mode: data.gameMode,
-          difficulty: data.difficulty,
-          visibility: data.isPrivate ? 'private' : 'public',
-          maxPlayers: data.playerCount,
-          topic: data.topic,
-          prompt: '',
-          host: {
-            userId: user.id as string,
-            username: user.username as string,
-            avatar: user.avatar as string | null,
-            avatarId: user.avatarId as string | null,
-          },
-          numberOfQuestions: data.questionCount,
-          totalTimeSeconds: data.secondsPerQuestion * data.questionCount,
+    this.quizBattleService.createRoom(
+      {
+        aiId: data.aiModelId,
+        mode: data.gameMode,
+        difficulty: data.difficulty,
+        visibility: data.isPrivate ? 'private' : 'public',
+        maxPlayers: data.playerCount,
+        topic: data.topic,
+        prompt: '',
+        host: {
+          userId: user.id as string,
+          username: user.username as string,
+          avatar: user.avatar as string | null,
+          avatarId: user.avatarId as string | null,
         },
-        (state) => {
-          // console.log("Sending room state to client:", state);
-          this.server.to(client.id).emit('battle:lobby', state);
-        },
-        (errorMessage) => {
-          this.handleError(errorMessage, client);
-        },
-      );
-    }, 1000);
+        numberOfQuestions: data.questionCount,
+        totalTimeSeconds: data.secondsPerQuestion * data.questionCount,
+      },
+      (state) => {
+        client.emit('battle:lobby', state);
+        ack({
+          success: true,
+          status: 'CREATED',
+          message: 'Room created successfully',
+          requestId: data.requestId,
+          serverTime: Date.now(),
+        });
+      },
+      (errorMessage) => {
+        ack({
+          success: false,
+          status: 'SERVER_ERROR',
+          message: errorMessage,
+          requestId: data.requestId,
+          serverTime: Date.now(),
+        });
+      },
+    );
   }
 
   @SubscribeMessage('battle:join')
   handleJoinRoom(
     @ConnectedSocket()
     client: Socket,
+
+    @Ack()
+    ack: (response: AckResponse) => void,
+
     @MessageBody()
-    data: {
-      roomId: string;
-    },
+    data: JoinRoomDto,
   ) {
     const user = this.eventsService.extractUserFromSocket(client);
+    // Fixed: this was previously `requestId: data.roomId` - the ack's
+    // requestId field was silently being filled with the room id because
+    // the join payload never actually carried a requestId.
+    const requestId = data.requestId ?? this.eventsService.generateRequestId();
 
     if (!user) {
       this.logger.warn(`Invalid user information for client: ${client.id}`);
-      this.handleError('An error occurred while joining the room', client);
+      // this.handleError(`An error occurred while joining the room`, client);
+      ack({
+        success: false,
+        status: 'NOT_FOUND',
+        message: 'An error occurred while joining the room',
+        requestId: requestId,
+        serverTime: Date.now(),
+      });
       return;
     }
 
@@ -204,9 +266,23 @@ export class EventsGateway {
         this.server.to(socketIds).emit('battle:lobby', state);
         // join user to the room
         client.emit('battle:joined-response', state);
+        ack({
+          success: true,
+          status: 'OK',
+          message: 'Joined room successfully',
+          requestId: requestId,
+          serverTime: Date.now(),
+        });
       },
       (errorMessage) => {
-        this.handleError(errorMessage, client);
+        // this.handleError(errorMessage, client);
+        ack({
+          success: false,
+          status: 'SERVER_ERROR',
+          message: errorMessage,
+          requestId: requestId,
+          serverTime: Date.now(),
+        });
       },
     );
   }
@@ -217,10 +293,7 @@ export class EventsGateway {
     client: Socket,
 
     @MessageBody()
-    data: {
-      ready: boolean;
-      roomId: string;
-    },
+    data: ReadyDto,
   ) {
     const user = this.eventsService.extractUserFromSocket(client);
 
@@ -254,9 +327,7 @@ export class EventsGateway {
     client: Socket,
 
     @MessageBody()
-    data: {
-      roomId: string;
-    },
+    data: RoomIdDto,
   ) {
     const user = this.eventsService.extractUserFromSocket(client);
 
@@ -289,9 +360,7 @@ export class EventsGateway {
     client: Socket,
 
     @MessageBody()
-    data: {
-      roomId: string;
-    },
+    data: RoomIdDto,
   ) {
     const user = this.eventsService.extractUserFromSocket(client);
 
@@ -350,11 +419,7 @@ export class EventsGateway {
     @ConnectedSocket()
     client: Socket,
     @MessageBody()
-    data: {
-      roomId: string;
-      oId: string;
-      qId: string;
-    },
+    data: AnswerDto,
   ) {
     const user = this.eventsService.extractUserFromSocket(client);
 

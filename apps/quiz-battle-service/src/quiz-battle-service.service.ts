@@ -10,6 +10,7 @@ import { QuizBattleQuestionService } from './services/quiz-battle-question.servi
 import { QuizBattleRankingService } from './services/quiz-battle-ranking.service';
 import { PlayerGameStateService } from './services/player.game.state.service';
 import Redis from 'ioredis';
+import { EventsService } from './events/events.service';
 
 @Injectable()
 export class QuizBattleService {
@@ -19,8 +20,6 @@ export class QuizBattleService {
   private readonly sessions = new Map<string, RoomSession>();
 
   private readonly reconnectGracePeriod = 10 * 60 * 1000;
-
-  private readonly countdownSeconds = 3;
 
   private subscriber: Redis | null = null;
 
@@ -32,13 +31,45 @@ export class QuizBattleService {
     private readonly questionService: QuizBattleQuestionService,
     private readonly rankingService: QuizBattleRankingService,
     private readonly playerGameStateService: PlayerGameStateService,
+    // NOTE ON MODULE WIRING: EventsService lives in EventsModule, and
+    // EventsModule's gateway already depends on QuizBattleService. Injecting
+    // EventsService here creates a module cycle (EventsModule <-> the module
+    // that provides QuizBattleService) unless you either:
+    //   1) wrap both sides in forwardRef(), e.g.
+    //        @Inject(forwardRef(() => EventsService)) private readonly eventsService: EventsService
+    //      and the equivalent forwardRef() in each module's `imports`, or
+    //   2) (recommended) pull EventsService (+ its Redis-backed socket
+    //      registry) out into its own small shared module that both
+    //      EventsModule and QuizBattleModule import - it has no dependency
+    //      on QuizBattleService, so this removes the cycle entirely.
+    private readonly eventsService: EventsService,
   ) {}
 
   async onModuleInit() {
     this.subscriber = this.redisService.client.duplicate();
 
+    this.subscriber.on('error', (err) => {
+      this.logger.error(
+        'Redis subscriber error',
+        err instanceof Error ? err.stack : String(err),
+      );
+    });
+
+    try {
+      await (this.redisService.client as any).config(
+        'SET',
+        'notify-keyspace-events',
+        'Ex',
+      );
+    } catch (error) {
+      this.logger.warn(
+        'Could not set notify-keyspace-events on Redis (may be disabled for managed/cluster instances). ' +
+          'Ensure it is configured out of band: CONFIG SET notify-keyspace-events Ex',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+
     // Subscribe to expired key events from Redis DB 0.
-    // Requires: redis-cli config set notify-keyspace-events Kx
     await this.subscriber.psubscribe('__keyevent@0__:expired');
 
     this.subscriber.on(
@@ -77,19 +108,14 @@ export class QuizBattleService {
       return;
     }
 
-    // 1. Mark room as finished
-    session.room.status = 'FINISHED';
-    session.room.finishedAt = Date.now();
-    session.room.currentQuestionId = undefined;
-    session.room.questionStartedAt = undefined;
-    session.room.questionEndsAt = undefined;
-
-    if (session.timer) {
-      clearTimeout(session.timer);
-      session.timer = undefined;
+    if (session.room.status === 'FINISHED') {
+      this.sessions.delete(roomId);
+      return;
     }
 
-    // 2. Clear all pending disconnect timers for this room
+    await this.finishMatch(session);
+
+    // Clear all pending disconnect timers for this room
     for (const [key, timer] of this.disconnectTimers.entries()) {
       if (key.startsWith(`${roomId}:`)) {
         clearTimeout(timer);
@@ -97,108 +123,59 @@ export class QuizBattleService {
       }
     }
 
-    // 3. Final ranking update
-    this.rankingService.updateRanking(session);
-
-    // 4. Remove all players from userId -> roomId mapping
-    const players = [...session.users.values()];
-    await Promise.all(
-      players.map((player) =>
-        this.playerGameStateService.leaveGame(player.userId),
-      ),
-    );
-
-    // 5. Save final state with a short TTL so clients can fetch it briefly
-    await this.saveSessionToRedis(session, 5 * 60 * 1000);
-
-    // 6. Remove from local cache
+    // Remove from local cache
     this.sessions.delete(roomId);
 
     this.logger.debug(`Room finished & cleaned up | room=${roomId}`);
   }
 
+  // DISCONNECT (socket-level) — called by the gateway's handleDisconnect.
+  // This was previously never invoked anywhere, so a dropped connection
+  // never reached QuizBattleService at all: no grace-period timer started,
+  // and other players in the room never learned anyone left.
+  async handleSocketDisconnect(userId: string): Promise<void> {
+    try {
+      const roomId = await this.playerGameStateService.getRoomId(userId);
+      if (!roomId) return;
+
+      const session = await this.getRoom(roomId);
+      if (!session) return;
+
+      if (session.room.status === 'FINISHED') return;
+
+      const publicUser = await this.disconnectUser(roomId, userId);
+      if (!publicUser) return;
+
+      const state = this.createRoomState(session);
+      const remainingUserIds = [...session.users.values()]
+        .filter((u) => u.userId !== userId && u.status !== 'LEFT')
+        .map((u) => u.userId);
+
+      await this.broadcastToRoom(
+        remainingUserIds,
+        'battle:player-disconnected',
+        state,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Error handling socket disconnect | user=${userId}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
+  }
+
   // RECONNECT
   async checkReconnectGame(
     userId: string,
-    clientTime: number,
+    _clientTime: number,
     socketCallbackWithRoomState: (state: BattleState) => void,
     onError?: (message: string) => void,
   ): Promise<void> {
     try {
-      // 1. Check whether user belongs to any game
-      const roomId = await this.playerGameStateService.getRoomId(userId);
-
-      if (!roomId) {
-        // onError?.('User is not part of any game');
-        return;
+      const state = await this.getReconnectState(userId);
+      if (state) {
+        socketCallbackWithRoomState(state);
       }
-
-      // 2. Get room data
-      const roomData = await this.getRoom(roomId);
-
-      if (!roomData) {
-        this.logger.error(
-          `User ${userId} trying to reconnect to a non-existent room ${roomId}`,
-        );
-        await this.playerGameStateService.leaveGame(userId);
-        // onError?.('Room no longer exists');
-        return;
-      }
-
-      // 3. Finished room → send final state so client can show results
-      if (roomData.room.status === 'FINISHED') {
-        socketCallbackWithRoomState(this.createRoomState(roomData, userId));
-        return;
-      }
-
-      // 4. Expired room (marker gone while PLAYING) → finalize & send
-      const isExpired = await this.isRoomExpired(roomId);
-      if (isExpired) {
-        this.logger.warn(
-          `User ${userId} reconnecting to expired room ${roomId}; finalizing`,
-        );
-
-        roomData.room.status = 'FINISHED';
-        roomData.room.finishedAt = Date.now();
-
-        if (roomData.timer) {
-          clearTimeout(roomData.timer);
-          roomData.timer = undefined;
-        }
-
-        this.rankingService.updateRanking(roomData);
-        await this.saveSessionToRedis(roomData, 5 * 60 * 1000);
-        await this.playerGameStateService.leaveGame(userId);
-
-        socketCallbackWithRoomState(this.createRoomState(roomData, userId));
-        return;
-      }
-
-      // 5. Player already answered everything → send final state, don't kick
-      const player = roomData.users.get(userId);
-      if (player?.allQuestionsAnswered) {
-        socketCallbackWithRoomState(this.createRoomState(roomData, userId));
-        return;
-      }
-
-      // 6. Normal reconnect — mark CONNECTED, clear pending disconnect timer
-      if (player) {
-        player.status = 'CONNECTED';
-        player.lastSeenAt = Date.now();
-        player.disconnectedAt = undefined;
-
-        const timerKey = `${roomId}:${userId}`;
-        const pending = this.disconnectTimers.get(timerKey);
-        if (pending) {
-          clearTimeout(pending);
-          this.disconnectTimers.delete(timerKey);
-        }
-
-        await this.saveSessionToRedis(roomData);
-      }
-
-      socketCallbackWithRoomState(this.createRoomState(roomData, userId));
-      return;
     } catch (error) {
       this.logger.error(
         `Reconnect check failed | user=${userId}`,
@@ -210,7 +187,7 @@ export class QuizBattleService {
 
   async reconnectGame(
     userId: string,
-    clientTime: number,
+    _clientTime: number,
     socketCallbackWithRoomState: (state: BattleState) => void,
     errorCallback: (message: string) => void,
   ) {
@@ -218,61 +195,18 @@ export class QuizBattleService {
       const roomId = await this.playerGameStateService.getRoomId(userId);
 
       if (!roomId) {
-        // errorCallback('User is not part of any game');
+        errorCallback('User is not part of any game');
         return;
       }
 
-      const roomData = await this.getRoom(roomId);
+      const state = await this.getReconnectState(userId);
 
-      if (!roomData) {
-        await this.playerGameStateService.leaveGame(userId);
+      if (!state) {
         errorCallback('Room no longer exists');
         return;
       }
 
-      if (roomData.room.status === 'FINISHED') {
-        socketCallbackWithRoomState(this.createRoomState(roomData, userId));
-        return;
-      }
-
-      const isExpired = await this.isRoomExpired(roomId);
-
-      if (isExpired) {
-        roomData.room.status = 'FINISHED';
-        roomData.room.finishedAt = Date.now();
-
-        if (roomData.timer) {
-          clearTimeout(roomData.timer);
-          roomData.timer = undefined;
-        }
-
-        this.rankingService.updateRanking(roomData);
-        await this.saveSessionToRedis(roomData, 5 * 60 * 1000);
-        await this.playerGameStateService.leaveGame(userId);
-
-        socketCallbackWithRoomState(this.createRoomState(roomData, userId));
-        return;
-      }
-
-      const player = roomData.users.get(userId);
-
-      if (player) {
-        player.status = 'CONNECTED';
-        player.lastSeenAt = Date.now();
-        player.disconnectedAt = undefined;
-
-        const timerKey = `${roomId}:${userId}`;
-        const pending = this.disconnectTimers.get(timerKey);
-        if (pending) {
-          clearTimeout(pending);
-          this.disconnectTimers.delete(timerKey);
-        }
-
-        await this.saveSessionToRedis(roomData);
-      }
-
-      socketCallbackWithRoomState(this.createRoomState(roomData, userId));
-      return;
+      socketCallbackWithRoomState(state);
     } catch (error) {
       this.logger.error(
         `Reconnect failed | user=${userId}`,
@@ -280,6 +214,60 @@ export class QuizBattleService {
       );
       errorCallback('Failed to reconnect');
     }
+  }
+
+  // Shared resolution logic for both reconnect paths above. This used to be
+  // duplicated almost verbatim across checkReconnectGame/reconnectGame,
+  // which is exactly the kind of place duplicated logic quietly drifts out
+  // of sync and grows subtle bugs.
+  private async getReconnectState(userId: string): Promise<BattleState | null> {
+    const roomId = await this.playerGameStateService.getRoomId(userId);
+    if (!roomId) return null;
+
+    const session = await this.getRoom(roomId);
+
+    if (!session) {
+      this.logger.error(
+        `User ${userId} trying to reconnect to a non-existent room ${roomId}`,
+      );
+      await this.playerGameStateService.leaveGame(userId);
+      return null;
+    }
+
+    if (session.room.status === 'FINISHED') {
+      return this.createRoomState(session, userId);
+    }
+
+    if (await this.isRoomExpired(session)) {
+      this.logger.warn(
+        `User ${userId} reconnecting to expired room ${roomId}; finalizing`,
+      );
+      await this.finishMatch(session);
+      return this.createRoomState(session, userId);
+    }
+
+    const player = session.users.get(userId);
+
+    if (player?.allQuestionsAnswered) {
+      return this.createRoomState(session, userId);
+    }
+
+    if (player) {
+      player.status = 'CONNECTED';
+      player.lastSeenAt = Date.now();
+      player.disconnectedAt = undefined;
+
+      const timerKey = `${roomId}:${userId}`;
+      const pending = this.disconnectTimers.get(timerKey);
+      if (pending) {
+        clearTimeout(pending);
+        this.disconnectTimers.delete(timerKey);
+      }
+
+      await this.saveSessionToRedis(session);
+    }
+
+    return this.createRoomState(session, userId);
   }
 
   // CREATE ROOM
@@ -348,19 +336,17 @@ export class QuizBattleService {
 
       const questions = await this.questionService.generateQuestions({
         topic: room.topic,
-
         difficulty: room.difficulty,
-
-        numberOfQuestions: room.numberOfQuestions,
-
+        count: room.numberOfQuestions,
         prompt: room.prompt,
-
         mode: room.mode,
       });
 
-      if(!questions.length) {
+      if (!questions.length) {
         this.logger.warn('No questions generated for the room');
-        onError?.('No questions available for the selected topic and difficulty');
+        onError?.(
+          'No questions available for the selected topic and difficulty',
+        );
         return;
       }
 
@@ -473,7 +459,9 @@ export class QuizBattleService {
         await this.saveSessionToRedis(session);
         await this.playerGameStateService.enterGame(user.userId, roomId);
 
-        socketCallbackWithRoomState(this.createRoomState(session, user.userId));
+        socketCallbackWithRoomState(
+          this.createRoomState(session, user.userId),
+        );
         return;
       }
 
@@ -597,14 +585,12 @@ export class QuizBattleService {
         return;
       }
 
-
       if (!session.questions.length) {
         this.logger.warn('No questions available');
         onError?.('No questions available');
         return;
       }
 
-      session.questions = session.questions;
       session.room.status = 'PLAYING';
       session.room.currentQuestionIndex = -1;
       session.room.matchStartedAt = Date.now();
@@ -623,6 +609,14 @@ export class QuizBattleService {
       await this.playerGameStateService.startGame(roomId, durationMs);
 
       socketCallbackWithRoomState(this.createRoomState(session, userId));
+
+      // Previously nothing ever moved the game past this point:
+      // currentQuestionIndex stayed at -1 forever, no question was ever
+      // sent to clients, and there was no timer to progress the match.
+      // advanceQuestion() below broadcasts the first question directly to
+      // all players (separately from the ack'd 'battle:game-start' state
+      // the gateway sends back for this call).
+      void this.advanceQuestion(roomId);
       return;
     } catch (error) {
       this.logger.error(
@@ -632,6 +626,111 @@ export class QuizBattleService {
       onError?.('Failed to start match');
       return;
     }
+  }
+
+  // QUESTION FLOW — this entire block was missing. Nothing previously moved
+  // currentQuestionIndex, set questionStartedAt/questionEndsAt, or pushed a
+  // question payload to clients after the match "started".
+  private getPerQuestionDurationMs(room: RoomSessionDetails): number {
+    const total = room.totalTimeSeconds || 600;
+    const count = room.numberOfQuestions || 1;
+    const perQuestionSeconds = Math.max(5, Math.floor(total / count));
+    return perQuestionSeconds * 1000;
+  }
+
+  private async advanceQuestion(roomId: string): Promise<void> {
+    const session = await this.getRoom(roomId);
+    if (!session) return;
+
+    // Race guard: room may have already finished (e.g. everyone left, or
+    // the room-expiration key fired) between scheduling and firing.
+    if (session.room.status !== 'PLAYING') return;
+
+    if (session.timer) {
+      clearTimeout(session.timer);
+      session.timer = undefined;
+    }
+
+    const nextIndex = session.room.currentQuestionIndex + 1;
+
+    if (nextIndex >= session.questions.length) {
+      await this.finishMatch(session);
+      return;
+    }
+
+    const question = session.questions[nextIndex];
+    const durationMs = this.getPerQuestionDurationMs(session.room);
+    const now = Date.now();
+
+    session.room.currentQuestionIndex = nextIndex;
+    session.room.currentQuestionId = question.id;
+    session.room.questionStartedAt = now;
+    session.room.questionEndsAt = now + durationMs;
+
+    for (const player of session.users.values()) {
+      player.hasAnsweredCurrentQuestion = false;
+    }
+
+    await this.saveSessionToRedis(session);
+
+    const activeUserIds = [...session.users.values()]
+      .filter((u) => u.status !== 'LEFT')
+      .map((u) => u.userId);
+
+    await this.broadcastToRoom(
+      activeUserIds,
+      'battle:question',
+      this.createRoomState(session),
+    );
+
+    session.timer = setTimeout(() => {
+      void this.advanceQuestion(roomId);
+    }, durationMs);
+
+    if (typeof session.timer.unref === 'function') {
+      session.timer.unref();
+    }
+  }
+
+  private async finishMatch(session: RoomSession): Promise<void> {
+    if (session.room.status === 'FINISHED') return;
+
+    session.room.status = 'FINISHED';
+    session.room.finishedAt = Date.now();
+    session.room.currentQuestionId = undefined;
+    session.room.questionStartedAt = undefined;
+    session.room.questionEndsAt = undefined;
+
+    if (session.timer) {
+      clearTimeout(session.timer);
+      session.timer = undefined;
+    }
+
+    this.rankingService.updateRanking(session);
+    await this.saveSessionToRedis(session, 5 * 60 * 1000);
+
+    const players = [...session.users.values()];
+    await Promise.all(
+      players.map((player) =>
+        this.playerGameStateService.leaveGame(player.userId),
+      ),
+    );
+
+    const userIds = players.map((p) => p.userId);
+    await this.broadcastToRoom(
+      userIds,
+      'battle:finished',
+      this.createRoomState(session),
+    );
+  }
+
+  private async broadcastToRoom(
+    userIds: string[],
+    event: string,
+    payload: unknown,
+  ): Promise<void> {
+    if (!userIds.length) return;
+    await this.eventsService.emitToUsers(userIds, event, payload);
   }
 
   // DISCONNECT
@@ -706,12 +805,24 @@ export class QuizBattleService {
       }
 
       session.users.delete(userId);
+      await this.playerGameStateService.leaveGame(userId);
+
+      const activeRemaining = [...session.users.values()].filter(
+        (u) => u.status !== 'LEFT',
+      );
+
+      // If the match was in progress and nobody active is left, finish it
+      // immediately instead of leaving a PLAYING room with no players that
+      // would otherwise just sit around until the expiration timer fires.
+      if (session.room.status === 'PLAYING' && activeRemaining.length === 0) {
+        await this.finishMatch(session);
+        socketCallbackWithRoomState(this.createRoomState(session));
+        return;
+      }
 
       this.rankingService.updateRanking(session);
 
       await this.saveSessionToRedis(session);
-
-      await this.playerGameStateService.leaveGame(userId);
 
       const state = this.createRoomState(session);
 
@@ -782,6 +893,12 @@ export class QuizBattleService {
         return;
       }
 
+      // 5b. Answers must target the CURRENT question, not a stale/future one
+      if (questionIndex !== session.room.currentQuestionIndex) {
+        onError?.('This question is no longer active');
+        return;
+      }
+
       // 6. Question timeout check
       if (
         session.room.questionEndsAt &&
@@ -826,7 +943,6 @@ export class QuizBattleService {
       user.hasAnsweredCurrentQuestion = true;
       user.answeredQuestions++;
 
-      // ✅ FIXED: compare answered set size to total questions
       user.allQuestionsAnswered =
         user.answeredQuestionIds.size >= sessionLength;
 
@@ -850,8 +966,22 @@ export class QuizBattleService {
       // 15. Save updated state
       await this.saveSessionToRedis(session);
 
-      // 16. Send updated BattleState
+      // 16. Send updated BattleState to the answering player
       socketCallbackWithRoomState(this.createRoomState(session, userId));
+
+      // 17. If every active player has answered the current question,
+      // don't make everyone wait out the full timer — advance right away.
+      const activePlayers = [...session.users.values()].filter(
+        (p) => p.status !== 'LEFT',
+      );
+      const allAnswered =
+        activePlayers.length > 0 &&
+        activePlayers.every((p) => p.hasAnsweredCurrentQuestion);
+
+      if (allAnswered) {
+        void this.advanceQuestion(roomId);
+      }
+
       return;
     } catch (error) {
       this.logger.error(
@@ -920,13 +1050,35 @@ export class QuizBattleService {
     user.status = 'LEFT';
     user.ready = false;
 
+    // BUG FIX: this was never releasing the user's room mapping in Redis.
+    // Without it, a player whose grace period expired stayed permanently
+    // "in" this room as far as PlayerGameStateService was concerned, and
+    // enterGame() would reject them from ever joining/creating another
+    // room afterwards.
+    await this.playerGameStateService.leaveGame(userId);
+
     this.rankingService.updateRanking(session);
     await this.saveSessionToRedis(session);
+
+    const activeRemaining = [...session.users.values()].filter(
+      (u) => u.status !== 'LEFT',
+    );
+
+    if (session.room.status === 'PLAYING' && activeRemaining.length === 0) {
+      await this.finishMatch(session);
+      return;
+    }
+
+    const remainingUserIds = activeRemaining.map((u) => u.userId);
+    await this.broadcastToRoom(
+      remainingUserIds,
+      'battle:player-left',
+      this.createRoomState(session),
+    );
   }
 
-  private async isRoomExpired(roomId: string): Promise<boolean> {
-    const session = this.sessions.get(roomId);
-    const status = session?.room.status;
+  private async isRoomExpired(session: RoomSession): Promise<boolean> {
+    const status = session.room.status;
 
     // Lobby rooms are never "expired"
     if (status === 'WAITING' || status === 'COUNTDOWN') {
@@ -934,7 +1086,7 @@ export class QuizBattleService {
     }
 
     const exists = await this.redisService.client.exists(
-      `game:room:${roomId}:expiration`,
+      `game:room:${session.room.roomId}:expiration`,
     );
 
     return exists === 0;
@@ -1043,9 +1195,5 @@ export class QuizBattleService {
     }
 
     return code;
-  }
-
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

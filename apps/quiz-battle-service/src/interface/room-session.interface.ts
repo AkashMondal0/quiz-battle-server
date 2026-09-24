@@ -161,7 +161,6 @@ export type BattlePhase =
 
 export interface BattleState {
   phase: BattlePhase;
-
   room: RoomSessionDetails | null;
   players: RoomSessionUser[];
 
@@ -182,4 +181,28 @@ export interface BattleState {
 
   errorEvent: string | null;
   errorMessage: string | null;
+}
+
+export interface AckResponse<T = unknown> {
+  success: boolean;
+
+  status:
+    | 'OK'
+    | 'CREATED'
+    | 'UPDATED'
+    | 'DELETED'
+    | 'ALREADY_EXISTS'
+    | 'NOT_FOUND'
+    | 'VALIDATION_ERROR'
+    | 'UNAUTHORIZED'
+    | 'CONFLICT'
+    | 'SERVER_ERROR';
+
+  message: string;
+
+  requestId: string;
+
+  data?: T;
+
+  serverTime: number;
 }

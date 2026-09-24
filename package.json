@@ -1,6 +1,6 @@
 {
   "name": "JoySpot-Microservices",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "JoySpot Microservices",
   "author": "akashmondal0",
   "private": true,
@@ -32,7 +32,6 @@
     "app:quiz-battle": "nest start --watch quiz-battle-service"
   },
   "dependencies": {
-    "@google/genai": "^2.23.0",
     "@nestjs/bullmq": "^11.0.3",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",
@@ -61,6 +60,7 @@
     "h3-js": "^4.4.0",
     "ioredis": "^5.11.1",
     "nanoid": "^5.1.9",
+    "openai": "^7.21.0",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "passport-jwt": "^4.0.1",
