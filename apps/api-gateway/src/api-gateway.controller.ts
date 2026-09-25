@@ -11,7 +11,7 @@ export class ApiGatewayController {
 
   @Get()
   getHello(): any {
-    return this.apiGatewayService.createEvent();
+    return this.apiGatewayService.getUsers();
   }
 
   // @Get('config')
