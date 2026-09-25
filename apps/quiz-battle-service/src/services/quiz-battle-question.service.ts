@@ -3,12 +3,10 @@ import {
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
-import OpenAI from 'openai';
+import { GoogleGenAI } from '@google/genai';
 
-import {
-  RoomQuestion,
-  RoomSession,
-} from '../interface/room-session.interface';
+import { RoomQuestion, RoomSession } from '../interface/room-session.interface';
+import { _Questions } from './_Questions';
 
 // ============================================================
 // TYPES
@@ -22,6 +20,7 @@ interface GenerateQuestionsOptions {
   topic?: string;
   prompt?: string;
   mode?: string;
+  numberOfQuestions?: number;
 }
 
 interface AIQuizQuestion {
@@ -41,11 +40,9 @@ interface AIQuizResponse {
 
 @Injectable()
 export class QuizBattleQuestionService {
-  private readonly logger = new Logger(
-    QuizBattleQuestionService.name,
-  );
+  private readonly logger = new Logger(QuizBattleQuestionService.name);
 
-  private readonly ai: OpenAI;
+  private readonly ai: GoogleGenAI;
 
   private readonly model: string;
 
@@ -54,48 +51,30 @@ export class QuizBattleQuestionService {
   private readonly timeoutMs: number;
 
   constructor() {
-    const apiKey = process.env.OPENROUTER_API_KEY;
+    // Free API key from https://aistudio.google.com/apikey
+    const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
-      throw new Error(
-        'OPENROUTER_API_KEY is not configured',
-      );
+      throw new Error('GEMINI_API_KEY is not configured');
     }
 
-    this.model =
-      process.env.OPENROUTER_MODEL ||
-      'google/gemma-3-27b-it:free';
+    // gemini-2.5-flash and gemini-3.5-flash both have a free tier
+    // via Google AI Studio (no billing/card required).
+    this.model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
-    this.maxRetries = Math.max(
-      1,
-      Number(
-        process.env.OPENROUTER_MAX_RETRIES || 2,
-      ),
-    );
+    this.maxRetries = Math.max(1, Number(process.env.GEMINI_MAX_RETRIES || 2));
 
     this.timeoutMs = Math.max(
       10_000,
-      Number(
-        process.env.OPENROUTER_TIMEOUT_MS || 60_000,
-      ),
+      Number(process.env.GEMINI_TIMEOUT_MS || 60_000),
     );
 
-    this.ai = new OpenAI({
+    this.ai = new GoogleGenAI({
       apiKey,
-
-      baseURL:
-        'https://openrouter.ai/api/v1',
-
-      defaultHeaders: {
-        'HTTP-Referer':
-          'https://quizbattle.app',
-
-        'X-Title': 'QuizBattle',
-      },
     });
 
     this.logger.log(
-      `OpenRouter initialized | model=${this.model} | retries=${this.maxRetries} | timeout=${this.timeoutMs}ms`,
+      `Gemini initialized | model=${this.model} | retries=${this.maxRetries} | timeout=${this.timeoutMs}ms`,
     );
   }
 
@@ -107,46 +86,37 @@ export class QuizBattleQuestionService {
     options: GenerateQuestionsOptions = {},
     room?: RoomSession,
   ): Promise<RoomQuestion[]> {
-    const count = this.normalizeCount(
-      options.count,
-    );
+    const count = this.normalizeCount(options.count);
 
-    const difficulty =
-      this.normalizeDifficulty(
-        options.difficulty,
-      );
+    const difficulty = this.normalizeDifficulty(options.difficulty);
 
-    const topic =
-      this.cleanText(options.topic) ||
-      'General Knowledge';
+    const topic = this.cleanText(options.topic) || 'General Knowledge';
 
-    const prompt =
-      this.cleanText(options.prompt) || '';
+    const prompt = this.cleanText(options.prompt) || '';
 
-    const mode =
-      this.cleanText(options.mode) ||
-      'STANDARD';
+    const mode = this.cleanText(options.mode) || 'STANDARD';
+
+    const numberOfQuestions = options.numberOfQuestions ?? 5;
 
     this.logger.log(
       `Generating quiz | count=${count} | difficulty=${difficulty} | topic="${topic}" | mode="${mode}"`,
     );
 
     try {
-      // const aiResponse =
-      //   await this.requestQuestionsFromAI({
-      //     count,
-      //     difficulty,
-      //     topic,
-      //     prompt,
-      //     mode,
-      //   });
+      const aiResponse = await this.requestQuestionsFromAI({
+        count,
+        difficulty,
+        topic,
+        prompt,
+        mode,
+        numberOfQuestions,
+      });
 
-      const questions = await this.createDummyQuestions();
-        // this.transformQuestions(
-        //   aiResponse.questions,
-        //   difficulty,
-        //   topic,
-        // );
+      const questions = this.transformQuestions(
+        aiResponse.questions,
+        difficulty,
+        topic,
+      );
 
       if (questions.length !== count) {
         throw new Error(
@@ -154,17 +124,13 @@ export class QuizBattleQuestionService {
         );
       }
 
-      this.logger.log(
-        `Successfully generated ${questions.length} questions`,
-      );
+      this.logger.log(`Successfully generated ${questions.length} questions`);
 
       return questions;
     } catch (error) {
       this.logger.error(
-        'OpenRouter quiz generation failed',
-        error instanceof Error
-          ? error.stack
-          : String(error),
+        'Gemini quiz generation failed',
+        error instanceof Error ? error.stack : String(error),
       );
 
       throw new InternalServerErrorException(
@@ -174,210 +140,136 @@ export class QuizBattleQuestionService {
   }
 
   // ==========================================================
-  // OPENROUTER REQUEST
+  // GEMINI REQUEST
   // ==========================================================
 
-  private async requestQuestionsFromAI(
-    params: {
-      count: number;
-      difficulty: Difficulty;
-      topic: string;
-      prompt: string;
-      mode: string;
-    },
-  ): Promise<AIQuizResponse> {
-    const systemPrompt =
-      this.buildSystemPrompt(params);
+  private async requestQuestionsFromAI(params: {
+    count: number;
+    difficulty: Difficulty;
+    topic: string;
+    prompt: string;
+    mode: string;
+    numberOfQuestions?: number;
+  }): Promise<AIQuizResponse> {
+    const systemPrompt = this.buildSystemPrompt(params);
 
-    const userPrompt =
-      this.buildUserPrompt(params);
+    const userPrompt = this.buildUserPrompt(params);
 
     let lastError: unknown;
 
-    for (
-      let attempt = 1;
-      attempt <= this.maxRetries;
-      attempt++
-    ) {
+    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       try {
-        this.logger.log(
-          `OpenRouter request attempt ${attempt}/${this.maxRetries}`,
+        this.logger.log(`Gemini request attempt ${attempt}/${this.maxRetries}`);
+
+        const content = await this.generateContentWithTimeout(
+          systemPrompt,
+          userPrompt,
         );
 
-        const response =
-          await this.generateContentWithTimeout(
-            systemPrompt,
-            userPrompt,
-          );
-
-        const modelUsed =
-          response.model;
-
-        const finishReason =
-          response.choices?.[0]
-            ?.finish_reason;
-
-        const message =
-          response.choices?.[0]?.message;
-
-        const content =
-          typeof message?.content === 'string'
-            ? message.content
-            : '';
-
-        this.logger.debug(
-          `OpenRouter model used: ${modelUsed}`,
-        );
-
-        this.logger.debug(
-          `OpenRouter finish reason: ${finishReason}`,
-        );
-
-        this.logger.debug(
-          `OpenRouter response length: ${content.length}`,
-        );
+        this.logger.debug(`Gemini response length: ${content.length}`);
 
         if (!content.trim()) {
+          throw new Error('Gemini returned an empty response');
+        }
+
+        if (content.trim().toLowerCase().startsWith('user safety:')) {
           throw new Error(
-            'OpenRouter returned an empty response',
+            `Gemini returned a safety response instead of quiz JSON: ${content}`,
           );
         }
 
-        // ----------------------------------------------------
-        // IMPORTANT
-        // ----------------------------------------------------
-        // Some OpenRouter free providers can return things
-        // like:
-        //
-        // User Safety: safe
-        //
-        // That is NOT a quiz response.
-        //
-        // Detect it before JSON parsing.
-        // ----------------------------------------------------
-
-        if (
-          content
-            .trim()
-            .toLowerCase()
-            .startsWith('user safety:')
-        ) {
-          throw new Error(
-            `OpenRouter provider returned safety response instead of quiz JSON: ${content}`,
-          );
-        }
-
-        const jsonText =
-          this.cleanJsonResponse(content);
+        const jsonText = this.cleanJsonResponse(content);
 
         let parsed: unknown;
 
         try {
           parsed = JSON.parse(jsonText);
         } catch (error) {
-          this.logger.error(
-            `Invalid JSON returned by OpenRouter`,
-          );
+          this.logger.error(`Invalid JSON returned by Gemini`);
 
-          this.logger.error(
-            `Raw response: ${content}`,
-          );
+          this.logger.error(`Raw response: ${content}`);
 
-          throw new Error(
-            `OpenRouter returned invalid JSON`,
-          );
+          throw new Error(`Gemini returned invalid JSON`);
         }
 
-        this.validateAIResponse(
-          parsed,
-          params.count,
-        );
+        this.validateAIResponse(parsed, params.count);
 
         return parsed as AIQuizResponse;
       } catch (error) {
         lastError = error;
 
-        const retryable =
-          this.isRetryableError(error);
+        const retryable = this.isRetryableError(error);
 
         this.logger.warn(
-          `OpenRouter attempt ${attempt} failed | retryable=${retryable} | error=${
-            error instanceof Error
-              ? error.message
-              : String(error)
+          `Gemini attempt ${attempt} failed | retryable=${retryable} | error=${
+            error instanceof Error ? error.message : String(error)
           }`,
         );
 
-        if (
-          !retryable ||
-          attempt >= this.maxRetries
-        ) {
+        if (!retryable || attempt >= this.maxRetries) {
           break;
         }
 
-        const delay =
-          this.calculateBackoff(attempt);
+        const delay = this.calculateBackoff(attempt);
 
-        this.logger.warn(
-          `Retrying OpenRouter request in ${delay}ms...`,
-        );
+        this.logger.warn(`Retrying Gemini request in ${delay}ms...`);
 
         await this.sleep(delay);
       }
     }
 
-    throw lastError instanceof Error
-      ? lastError
-      : new Error(String(lastError));
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
   // ==========================================================
-  // OPENROUTER API
+  // GEMINI API CALL
   // ==========================================================
 
   private async generateContentWithTimeout(
     systemPrompt: string,
     userPrompt: string,
-  ) {
-    const controller =
-      new AbortController();
+  ): Promise<string> {
+    const controller = new AbortController();
 
     const timeout = setTimeout(() => {
       controller.abort();
     }, this.timeoutMs);
 
     try {
-      return await this.ai.chat.completions.create(
-        {
-          model: this.model,
+      const responsePromise = this.ai.models.generateContent({
+        model: this.model,
 
-          messages: [
-            {
-              role: 'system',
-              content: systemPrompt,
-            },
-            {
-              role: 'user',
-              content: userPrompt,
-            },
-          ],
+        contents: userPrompt,
+
+        config: {
+          systemInstruction: systemPrompt,
 
           temperature: 0.7,
 
-          max_tokens: 8000,
+          maxOutputTokens: 8000,
+
+          // Force Gemini to return raw JSON,
+          // no markdown fences.
+          responseMimeType: 'application/json',
         },
-        {
-          signal: controller.signal,
-        },
-      );
+      });
+
+      const timeoutPromise = new Promise<never>((_resolve, reject) => {
+        controller.signal.addEventListener('abort', () => {
+          reject(
+            new Error(`Gemini request timed out after ${this.timeoutMs}ms`),
+          );
+        });
+      });
+
+      const response = await Promise.race([responsePromise, timeoutPromise]);
+
+      const text = response.text;
+
+      return typeof text === 'string' ? text : '';
     } catch (error) {
-      if (
-        error instanceof Error &&
-        error.name === 'AbortError'
-      ) {
-        throw new Error(
-          `OpenRouter request timed out after ${this.timeoutMs}ms`,
-        );
+      if (error instanceof Error && error.message.includes('timed out')) {
+        throw error;
       }
 
       throw error;
@@ -390,14 +282,12 @@ export class QuizBattleQuestionService {
   // SYSTEM PROMPT
   // ==========================================================
 
-  private buildSystemPrompt(
-    params: {
-      count: number;
-      difficulty: Difficulty;
-      topic: string;
-      mode: string;
-    },
-  ): string {
+  private buildSystemPrompt(params: {
+    count: number;
+    difficulty: Difficulty;
+    topic: string;
+    mode: string;
+  }): string {
     return `
 You are the QuizBattle AI question generator.
 
@@ -518,15 +408,13 @@ No additional text.
   // USER PROMPT
   // ==========================================================
 
-  private buildUserPrompt(
-    params: {
-      count: number;
-      difficulty: Difficulty;
-      topic: string;
-      prompt: string;
-      mode: string;
-    },
-  ): string {
+  private buildUserPrompt(params: {
+    count: number;
+    difficulty: Difficulty;
+    topic: string;
+    prompt: string;
+    mode: string;
+  }): string {
     return `
 Generate ${params.count} ${params.difficulty} quiz questions.
 
@@ -561,52 +449,32 @@ Return the JSON now.
   // JSON CLEANER
   // ==========================================================
 
-  private cleanJsonResponse(
-    content: string,
-  ): string {
+  private cleanJsonResponse(content: string): string {
     let text = content.trim();
 
     // Remove ```json
-    if (
-      text.startsWith('```json')
-    ) {
+    if (text.startsWith('```json')) {
       text = text.substring(7);
     }
 
     // Remove ```
-    if (
-      text.startsWith('```')
-    ) {
+    if (text.startsWith('```')) {
       text = text.substring(3);
     }
 
-    if (
-      text.endsWith('```')
-    ) {
-      text = text.substring(
-        0,
-        text.length - 3,
-      );
+    if (text.endsWith('```')) {
+      text = text.substring(0, text.length - 3);
     }
 
     text = text.trim();
 
     // Find JSON object
-    const firstBrace =
-      text.indexOf('{');
+    const firstBrace = text.indexOf('{');
 
-    const lastBrace =
-      text.lastIndexOf('}');
+    const lastBrace = text.lastIndexOf('}');
 
-    if (
-      firstBrace !== -1 &&
-      lastBrace !== -1 &&
-      lastBrace > firstBrace
-    ) {
-      text = text.substring(
-        firstBrace,
-        lastBrace + 1,
-      );
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      text = text.substring(firstBrace, lastBrace + 1);
     }
 
     return text.trim();
@@ -620,205 +488,106 @@ Return the JSON now.
     response: unknown,
     expectedCount: number,
   ): asserts response is AIQuizResponse {
-    if (
-      !response ||
-      typeof response !== 'object'
-    ) {
-      throw new Error(
-        'AI response is not an object',
-      );
+    if (!response || typeof response !== 'object') {
+      throw new Error('AI response is not an object');
     }
 
-    const data =
-      response as Record<string, unknown>;
+    const data = response as Record<string, unknown>;
 
-    if (
-      !Array.isArray(
-        data.questions,
-      )
-    ) {
-      throw new Error(
-        'AI response does not contain questions array',
-      );
+    if (!Array.isArray(data.questions)) {
+      throw new Error('AI response does not contain questions array');
     }
 
-    if (
-      data.questions.length !==
-      expectedCount
-    ) {
+    if (data.questions.length !== expectedCount) {
       throw new Error(
         `Expected ${expectedCount} questions but received ${data.questions.length}`,
       );
     }
 
-    const questionSet =
-      new Set<string>();
+    const questionSet = new Set<string>();
 
-    data.questions.forEach(
-      (rawQuestion, index) => {
-        if (
-          !rawQuestion ||
-          typeof rawQuestion !==
-            'object'
-        ) {
+    data.questions.forEach((rawQuestion, index) => {
+      if (!rawQuestion || typeof rawQuestion !== 'object') {
+        throw new Error(`Question ${index + 1} is invalid`);
+      }
+
+      const question = rawQuestion as Record<string, unknown>;
+
+      // --------------------------------------------------
+      // QUESTION TEXT
+      // --------------------------------------------------
+
+      if (typeof question.question !== 'string' || !question.question.trim()) {
+        throw new Error(`Question ${index + 1} has invalid text`);
+      }
+
+      const normalizedQuestion = this.normalizeForDuplicateCheck(
+        question.question,
+      );
+
+      if (questionSet.has(normalizedQuestion)) {
+        throw new Error(`Duplicate question detected: ${question.question}`);
+      }
+
+      questionSet.add(normalizedQuestion);
+
+      // --------------------------------------------------
+      // OPTIONS
+      // --------------------------------------------------
+
+      if (!Array.isArray(question.options)) {
+        throw new Error(`Question ${index + 1} has no options`);
+      }
+
+      if (question.options.length !== 4) {
+        throw new Error(`Question ${index + 1} must have exactly 4 options`);
+      }
+
+      const optionSet = new Set<string>();
+
+      question.options.forEach((option, optionIndex) => {
+        if (typeof option !== 'string' || !option.trim()) {
           throw new Error(
-            `Question ${index + 1} is invalid`,
+            `Question ${index + 1} option ${optionIndex + 1} is invalid`,
           );
         }
 
-        const question =
-          rawQuestion as Record<
-            string,
-            unknown
-          >;
+        const normalizedOption = this.normalizeForDuplicateCheck(option);
 
-        // --------------------------------------------------
-        // QUESTION TEXT
-        // --------------------------------------------------
-
-        if (
-          typeof question.question !==
-            'string' ||
-          !question.question.trim()
-        ) {
-          throw new Error(
-            `Question ${index + 1} has invalid text`,
-          );
+        if (optionSet.has(normalizedOption)) {
+          throw new Error(`Question ${index + 1} contains duplicate options`);
         }
 
-        const normalizedQuestion =
-          this.normalizeForDuplicateCheck(
-            question.question,
-          );
+        optionSet.add(normalizedOption);
+      });
 
-        if (
-          questionSet.has(
-            normalizedQuestion,
-          )
-        ) {
-          throw new Error(
-            `Duplicate question detected: ${
-              question.question
-            }`,
-          );
-        }
+      // --------------------------------------------------
+      // CORRECT OPTION
+      // --------------------------------------------------
 
-        questionSet.add(
-          normalizedQuestion,
-        );
+      if (typeof question.correctOptionIndex !== 'number') {
+        throw new Error(`Question ${index + 1} has invalid correctOptionIndex`);
+      }
 
-        // --------------------------------------------------
-        // OPTIONS
-        // --------------------------------------------------
+      if (
+        !Number.isInteger(question.correctOptionIndex) ||
+        question.correctOptionIndex < 0 ||
+        question.correctOptionIndex > 3
+      ) {
+        throw new Error(`Question ${index + 1} correctOptionIndex must be 0-3`);
+      }
 
-        if (
-          !Array.isArray(
-            question.options,
-          )
-        ) {
-          throw new Error(
-            `Question ${index + 1} has no options`,
-          );
-        }
+      // --------------------------------------------------
+      // EXPLANATION
+      // --------------------------------------------------
 
-        if (
-          question.options.length !== 4
-        ) {
-          throw new Error(
-            `Question ${index + 1} must have exactly 4 options`,
-          );
-        }
-
-        const optionSet =
-          new Set<string>();
-
-        question.options.forEach(
-          (option, optionIndex) => {
-            if (
-              typeof option !==
-                'string' ||
-              !option.trim()
-            ) {
-              throw new Error(
-                `Question ${
-                  index + 1
-                } option ${
-                  optionIndex + 1
-                } is invalid`,
-              );
-            }
-
-            const normalizedOption =
-              this.normalizeForDuplicateCheck(
-                option,
-              );
-
-            if (
-              optionSet.has(
-                normalizedOption,
-              )
-            ) {
-              throw new Error(
-                `Question ${
-                  index + 1
-                } contains duplicate options`,
-              );
-            }
-
-            optionSet.add(
-              normalizedOption,
-            );
-          },
-        );
-
-        // --------------------------------------------------
-        // CORRECT OPTION
-        // --------------------------------------------------
-
-        if (
-          typeof question.correctOptionIndex !==
-          'number'
-        ) {
-          throw new Error(
-            `Question ${
-              index + 1
-            } has invalid correctOptionIndex`,
-          );
-        }
-
-        if (
-          !Number.isInteger(
-            question.correctOptionIndex,
-          ) ||
-          question.correctOptionIndex <
-            0 ||
-          question.correctOptionIndex >
-            3
-        ) {
-          throw new Error(
-            `Question ${
-              index + 1
-            } correctOptionIndex must be 0-3`,
-          );
-        }
-
-        // --------------------------------------------------
-        // EXPLANATION
-        // --------------------------------------------------
-
-        if (
-          typeof question.explanation !==
-            'string' ||
-          !question.explanation.trim()
-        ) {
-          throw new Error(
-            `Question ${
-              index + 1
-            } has invalid explanation`,
-          );
-        }
-      },
-    );
+      if (
+        typeof question.explanation !== 'string' ||
+        !question.explanation.trim()
+      ) {
+        throw new Error(`Question ${index + 1} has invalid explanation`);
+      }
+    });
   }
 
   // ==========================================================
@@ -830,117 +599,69 @@ Return the JSON now.
     difficulty: Difficulty,
     topic: string,
   ): RoomQuestion[] {
-    return aiQuestions.map(
-      (aiQuestion, questionIndex) => {
-        const options: any[] =
-          aiQuestion.options.map(
-            (text, optionIndex) => ({
-              id: this.generateOptionId(
-                questionIndex,
-                optionIndex,
-              ),
+    return aiQuestions.map((aiQuestion, questionIndex) => {
+      const options: any[] = aiQuestion.options.map((text, optionIndex) => ({
+        id: this.generateOptionId(questionIndex, optionIndex),
 
-              text: text.trim(),
-            }),
-          );
+        text: text.trim(),
+      }));
 
-        const correctOption =
-          options[
-            aiQuestion.correctOptionIndex
-          ];
+      const correctOption = options[aiQuestion.correctOptionIndex];
 
-        if (!correctOption) {
-          throw new Error(
-            `Invalid correct option for question ${
-              questionIndex + 1
-            }`,
-          );
-        }
+      if (!correctOption) {
+        throw new Error(
+          `Invalid correct option for question ${questionIndex + 1}`,
+        );
+      }
 
-        const settings =
-          this.getDifficultySettings(
-            difficulty,
-          );
+      const settings = this.getDifficultySettings(difficulty);
 
-        const question: RoomQuestion = {
-          id: this.generateQuestionId(
-            questionIndex,
-          ),
+      const question: RoomQuestion = {
+        id: this.generateQuestionId(questionIndex),
 
-          index: questionIndex,
+        index: questionIndex,
 
-          type: 'MCQ',
+        type: 'MCQ',
 
-          difficulty,
+        difficulty,
 
-          topic,
+        topic,
 
-          question:
-            aiQuestion.question.trim(),
+        question: aiQuestion.question.trim(),
 
-          media: null,
+        media: null,
 
-          options,
+        options,
 
-          /**
-           * IMPORTANT:
-           *
-           * Keep this only on the SERVER.
-           *
-           * Never send correctOptionId
-           * to the client in the active
-           * question payload.
-           */
-          correctOptionId:
-            correctOption.id,
+        /**
+         * IMPORTANT:
+         *
+         * Keep this only on the SERVER.
+         *
+         * Never send correctOptionId
+         * to the client in the active
+         * question payload.
+         */
+        correctOptionId: correctOption.id,
 
-          points: settings.points,
+        points: settings.points,
 
-          timeLimitSeconds:
-            settings.timeLimitSeconds,
+        timeLimitSeconds: settings.timeLimitSeconds,
 
-          status: 'WAITING',
+        status: 'WAITING',
 
-          explanation:
-            aiQuestion.explanation.trim(),
+        explanation: aiQuestion.explanation.trim(),
+      };
 
-          stats: {
-            totalAnswered: 0,
-
-            correctCount: 0,
-
-            optionDistribution:
-              options.reduce(
-                (
-                  distribution,
-                  option,
-                ) => {
-                  distribution[
-                    option.id
-                  ] = 0;
-
-                  return distribution;
-                },
-                {} as Record<
-                  string,
-                  number
-                >,
-              ),
-          },
-        };
-
-        return question;
-      },
-    );
+      return question;
+    });
   }
 
   // ==========================================================
   // DIFFICULTY SETTINGS
   // ==========================================================
 
-  private getDifficultySettings(
-    difficulty: Difficulty,
-  ): {
+  private getDifficultySettings(difficulty: Difficulty): {
     points: number;
     timeLimitSeconds: number;
   } {
@@ -970,31 +691,22 @@ Return the JSON now.
   // ID GENERATORS
   // ==========================================================
 
-  private generateQuestionId(
-    index: number,
-  ): string {
+  private generateQuestionId(index: number): string {
     return [
       'question',
       Date.now(),
       index,
-      Math.random()
-        .toString(36)
-        .substring(2, 8),
+      Math.random().toString(36).substring(2, 8),
     ].join('_');
   }
 
-  private generateOptionId(
-    questionIndex: number,
-    optionIndex: number,
-  ): string {
+  private generateOptionId(questionIndex: number, optionIndex: number): string {
     return [
       'option',
       Date.now(),
       questionIndex,
       optionIndex,
-      Math.random()
-        .toString(36)
-        .substring(2, 8),
+      Math.random().toString(36).substring(2, 8),
     ].join('_');
   }
 
@@ -1002,70 +714,39 @@ Return the JSON now.
   // NORMALIZATION
   // ==========================================================
 
-  private normalizeCount(
-    count?: number,
-  ): number {
-    if (
-      typeof count !== 'number' ||
-      !Number.isFinite(count)
-    ) {
+  private normalizeCount(count?: number): number {
+    if (typeof count !== 'number' || !Number.isFinite(count)) {
       return 5;
     }
 
-    return Math.min(
-      50,
-      Math.max(
-        1,
-        Math.floor(count),
-      ),
-    );
+    return Math.min(50, Math.max(1, Math.floor(count)));
   }
 
-  private normalizeDifficulty(
-    difficulty?: string,
-  ): Difficulty {
-    const value =
-      difficulty
-        ?.trim()
-        .toUpperCase();
+  private normalizeDifficulty(difficulty?: string): Difficulty {
+    const value = difficulty?.trim().toUpperCase();
 
-    if (
-      value === 'EASY' ||
-      value === 'MEDIUM' ||
-      value === 'HARD'
-    ) {
+    if (value === 'EASY' || value === 'MEDIUM' || value === 'HARD') {
       return value;
     }
 
     return 'MEDIUM';
   }
 
-  private cleanText(
-    value?: string,
-  ): string | undefined {
-    if (
-      typeof value !== 'string'
-    ) {
+  private cleanText(value?: string): string | undefined {
+    if (typeof value !== 'string') {
       return undefined;
     }
 
     const result = value.trim();
 
-    return result.length
-      ? result
-      : undefined;
+    return result.length ? result : undefined;
   }
 
-  private normalizeForDuplicateCheck(
-    value: string,
-  ): string {
+  private normalizeForDuplicateCheck(value: string): string {
     return value
       .toLowerCase()
       .replace(/\s+/g, ' ')
-      .replace(
-        /[^\p{L}\p{N}\s]/gu,
-        '',
-      )
+      .replace(/[^\p{L}\p{N}\s]/gu, '')
       .trim();
   }
 
@@ -1073,9 +754,7 @@ Return the JSON now.
   // RETRY
   // ==========================================================
 
-  private isRetryableError(
-    error: unknown,
-  ): boolean {
+  private isRetryableError(error: unknown): boolean {
     if (!error) {
       return false;
     }
@@ -1103,7 +782,7 @@ Return the JSON now.
       return true;
     }
 
-    // Temporary HTTP errors
+    // Temporary HTTP / quota errors
     if (
       message.includes('429') ||
       message.includes('500') ||
@@ -1111,173 +790,31 @@ Return the JSON now.
       message.includes('503') ||
       message.includes('504') ||
       message.includes('rate limit') ||
-      message.includes(
-        'temporarily unavailable',
-      )
+      message.includes('resource_exhausted') ||
+      message.includes('temporarily unavailable')
     ) {
       return true;
     }
 
     // Invalid model response
-    if (
-      message.includes('invalid json') ||
-      message.includes(
-        'user safety:',
-      )
-    ) {
+    if (message.includes('invalid json') || message.includes('user safety:')) {
       return false;
     }
 
     return false;
   }
 
-  private calculateBackoff(
-    attempt: number,
-  ): number {
+  private calculateBackoff(attempt: number): number {
     const base = 1000;
 
-    const exponential =
-      base *
-      Math.pow(2, attempt - 1);
+    const exponential = base * Math.pow(2, attempt - 1);
 
-    const jitter = Math.floor(
-      Math.random() * 500,
-    );
+    const jitter = Math.floor(Math.random() * 500);
 
-    return Math.min(
-      8000,
-      exponential + jitter,
-    );
+    return Math.min(8000, exponential + jitter);
   }
 
-  private async sleep(
-    milliseconds: number,
-  ): Promise<void> {
-    await new Promise(
-      (resolve) =>
-        setTimeout(
-          resolve,
-          milliseconds,
-        ),
-    );
+  private async sleep(milliseconds: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, milliseconds));
   }
-
-  private  async createDummyQuestions(): Promise<RoomQuestion[]> {
-    await this.sleep(2000); // Simulate delay
-    return Array.from(
-      { length: 5 },
-      (_, index) =>
-        this.createDummyQuestion(index),
-    );
-  }
-
-  private createDummyQuestion(
-    index: number,
-  ): RoomQuestion {
-    const question: RoomQuestion = {
-      id: this.generateQuestionId(index),
-
-      index,
-
-      type: 'MCQ',
-
-      difficulty: 'MEDIUM',
-
-      topic: 'General Knowledge',
-
-      question:
-        `This is dummy question ${
-          index + 1
-        }.`,
-
-      media: null,
-
-      options: [
-        {
-          id: this.generateOptionId(
-            index,
-            0,
-          ),
-
-          text: `Question ${
-            index + 1
-          } - Option 1`,
-        },
-        {
-          id: this.generateOptionId(
-            index,
-            1,
-          ),
-
-          text: `Question ${
-            index + 1
-          } - Option 2`,
-        },
-        {
-          id: this.generateOptionId(
-            index,
-            2,
-          ),
-
-          text: `Question ${
-            index + 1
-          } - Option 3`,
-        },
-        {
-          id: this.generateOptionId(
-            index,
-            3,
-          ),
-
-          text: `Question ${
-            index + 1
-          } - Option 4`,
-        },
-      ],
-
-      correctOptionId:
-        this.generateOptionId(
-          index,
-          0,
-        ),
-
-      points: 20,
-
-      timeLimitSeconds: 20,
-
-      status: 'WAITING',
-
-      explanation:
-        `Option 1 is the correct answer for dummy question ${
-          index + 1
-        }.`,
-
-      stats: {
-        totalAnswered: 0,
-
-        correctCount: 0,
-
-        optionDistribution: {},
-      },
-    };
-
-    const stats = question.stats ?? {
-      totalAnswered: 0,
-      correctCount: 0,
-      optionDistribution: {},
-    };
-
-    stats.optionDistribution ??= {};
-    question.stats = stats;
-
-    question.options.forEach(
-      (option) => {
-        stats.optionDistribution![
-          option.id
-        ] = 0;
-      },
-    );
-
-    return question;
-  } 
 }

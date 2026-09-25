@@ -49,8 +49,6 @@ export interface RoomQuestion {
   endsAt?: number;
 
   explanation?: string;
-
-  stats?: QuestionStatsDto;
 }
 
 export interface RoomSessionUser {

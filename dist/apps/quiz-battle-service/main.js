@@ -849,6 +849,7 @@ const quiz_battle_question_service_1 = __webpack_require__(/*! ./services/quiz-b
 const quiz_battle_ranking_service_1 = __webpack_require__(/*! ./services/quiz-battle-ranking.service */ "./apps/quiz-battle-service/src/services/quiz-battle-ranking.service.ts");
 const player_game_state_service_1 = __webpack_require__(/*! ./services/player.game.state.service */ "./apps/quiz-battle-service/src/services/player.game.state.service.ts");
 const events_service_1 = __webpack_require__(/*! ./events/events.service */ "./apps/quiz-battle-service/src/events/events.service.ts");
+const _Questions_1 = __webpack_require__(/*! ./services/_Questions */ "./apps/quiz-battle-service/src/services/_Questions.ts");
 let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
     redisService;
     questionService;
@@ -1049,13 +1050,7 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
                 answeredQuestionIds: new Set(),
                 allQuestionsAnswered: false,
             };
-            const questions = await this.questionService.generateQuestions({
-                topic: room.topic,
-                difficulty: room.difficulty,
-                count: room.numberOfQuestions,
-                prompt: room.prompt,
-                mode: room.mode,
-            });
+            const questions = _Questions_1._Questions;
             if (!questions.length) {
                 this.logger.warn('No questions generated for the room');
                 onError?.('No questions available for the selected topic and difficulty');
@@ -1070,20 +1065,7 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
                     updatedAt: now,
                 },
                 questions: questions,
-                messages: [
-                    {
-                        id: this.generateMessageId(),
-                        userId: host.userId,
-                        username: host.username,
-                        avatar: host.avatar ?? null,
-                        avatarId: host.avatarId ?? null,
-                        message: `Room created by ${host.username}`,
-                        timestamp: 0,
-                        emoji: '',
-                        system: true,
-                        systemMessage: `Room created by ${host.username}`,
-                    },
-                ],
+                messages: [],
             };
             this.rankingService.updateRanking(session);
             this.sessions.set(session.room.roomId, session);
@@ -1237,6 +1219,7 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
                 onError?.('No questions available');
                 return;
             }
+            session.questions = session.questions;
             session.room.status = 'PLAYING';
             session.room.currentQuestionIndex = -1;
             session.room.matchStartedAt = Date.now();
@@ -1250,7 +1233,6 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
             const durationMs = (session.room.totalTimeSeconds || 600) * 1000;
             await this.playerGameStateService.startGame(roomId, durationMs);
             socketCallbackWithRoomState(this.createRoomState(session, userId));
-            void this.advanceQuestion(roomId);
             return;
         }
         catch (error) {
@@ -1258,100 +1240,6 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
             onError?.('Failed to start match');
             return;
         }
-    }
-    async postMessage(data, socketCallbackWithRoomState, onError) {
-        try {
-            const session = await this.getRoom(data.roomId);
-            if (!session) {
-                onError?.('Room not found');
-                return;
-            }
-            session.messages.push({
-                id: this.generateMessageId(),
-                userId: data.id,
-                username: data.username,
-                avatar: data.avatar ?? null,
-                avatarId: data.avatarId ?? null,
-                message: data.message,
-                emoji: data.emoji,
-                system: data.system,
-                systemMessage: data.systemMessage,
-                timestamp: Date.now(),
-            });
-            await this.saveSessionToRedis(session);
-            socketCallbackWithRoomState(this.createRoomState(session, data.id));
-        }
-        catch (error) {
-            this.logger.error('Error posting message', error instanceof Error ? error.stack : String(error));
-            onError?.('Failed to post message');
-        }
-    }
-    getPerQuestionDurationMs(room) {
-        const total = room.totalTimeSeconds || 600;
-        const count = room.numberOfQuestions || 1;
-        const perQuestionSeconds = Math.max(5, Math.floor(total / count));
-        return perQuestionSeconds * 1000;
-    }
-    async advanceQuestion(roomId) {
-        const session = await this.getRoom(roomId);
-        if (!session)
-            return;
-        if (session.room.status !== 'PLAYING')
-            return;
-        if (session.timer) {
-            clearTimeout(session.timer);
-            session.timer = undefined;
-        }
-        const nextIndex = session.room.currentQuestionIndex + 1;
-        if (nextIndex >= session.questions.length) {
-            await this.finishMatch(session);
-            return;
-        }
-        const question = session.questions[nextIndex];
-        const durationMs = this.getPerQuestionDurationMs(session.room);
-        const now = Date.now();
-        session.room.currentQuestionIndex = nextIndex;
-        session.room.currentQuestionId = question.id;
-        session.room.questionStartedAt = now;
-        session.room.questionEndsAt = now + durationMs;
-        for (const player of session.users.values()) {
-            player.hasAnsweredCurrentQuestion = false;
-        }
-        await this.saveSessionToRedis(session);
-        const activeUserIds = [...session.users.values()]
-            .filter((u) => u.status !== 'LEFT')
-            .map((u) => u.userId);
-        await this.broadcastToRoom(activeUserIds, 'battle:question', this.createRoomState(session));
-        session.timer = setTimeout(() => {
-            void this.advanceQuestion(roomId);
-        }, durationMs);
-        if (typeof session.timer.unref === 'function') {
-            session.timer.unref();
-        }
-    }
-    async finishMatch(session) {
-        if (session.room.status === 'FINISHED')
-            return;
-        session.room.status = 'FINISHED';
-        session.room.finishedAt = Date.now();
-        session.room.currentQuestionId = undefined;
-        session.room.questionStartedAt = undefined;
-        session.room.questionEndsAt = undefined;
-        if (session.timer) {
-            clearTimeout(session.timer);
-            session.timer = undefined;
-        }
-        this.rankingService.updateRanking(session);
-        await this.saveSessionToRedis(session, 5 * 60 * 1000);
-        const players = [...session.users.values()];
-        await Promise.all(players.map((player) => this.playerGameStateService.leaveGame(player.userId)));
-        const userIds = players.map((p) => p.userId);
-        await this.broadcastToRoom(userIds, 'battle:finished', this.createRoomState(session));
-    }
-    async broadcastToRoom(userIds, event, payload) {
-        if (!userIds.length)
-            return;
-        await this.eventsService.emitToUsers(userIds, event, payload);
     }
     async disconnectUser(roomId, userId, onError) {
         const session = await this.getRoom(roomId);
@@ -1399,15 +1287,9 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
                 this.disconnectTimers.delete(timerKey);
             }
             session.users.delete(userId);
-            await this.playerGameStateService.leaveGame(userId);
-            const activeRemaining = [...session.users.values()].filter((u) => u.status !== 'LEFT');
-            if (session.room.status === 'PLAYING' && activeRemaining.length === 0) {
-                await this.finishMatch(session);
-                socketCallbackWithRoomState(this.createRoomState(session));
-                return;
-            }
             this.rankingService.updateRanking(session);
             await this.saveSessionToRedis(session);
+            await this.playerGameStateService.leaveGame(userId);
             const state = this.createRoomState(session);
             socketCallbackWithRoomState(state);
             return;
@@ -1415,6 +1297,33 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
         catch (error) {
             this.logger.error('Error leaving room', error instanceof Error ? error.stack : String(error));
             onError?.('An error occurred while leaving the room');
+        }
+    }
+    async postMessage(data, socketCallbackWithRoomState, onError) {
+        try {
+            const session = await this.getRoom(data.roomId);
+            if (!session) {
+                onError?.('Room not found');
+                return;
+            }
+            session.messages.push({
+                id: `message_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+                userId: data.id,
+                username: data.username,
+                avatar: data.avatar ?? null,
+                avatarId: data.avatarId ?? null,
+                message: data.message,
+                emoji: data.emoji,
+                system: data.system,
+                systemMessage: data.systemMessage,
+                timestamp: Date.now(),
+            });
+            await this.saveSessionToRedis(session);
+            socketCallbackWithRoomState(this.createRoomState(session, data.id));
+        }
+        catch (error) {
+            this.logger.error('Error posting message', error instanceof Error ? error.stack : String(error));
+            onError?.('Failed to post message');
         }
     }
     async answerAttempt({ roomId, userId, qId, oId, }, socketCallbackWithRoomState, onError) {
@@ -1440,10 +1349,6 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
             const sessionLength = session.questions.length;
             const questionIndex = session.questions.findIndex((item) => item.id === qId);
             if (questionIndex === -1) {
-                onError?.('This question is no longer active');
-                return;
-            }
-            if (questionIndex !== session.room.currentQuestionIndex) {
                 onError?.('This question is no longer active');
                 return;
             }
@@ -1487,12 +1392,6 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
             this.rankingService.updateRanking(session);
             await this.saveSessionToRedis(session);
             socketCallbackWithRoomState(this.createRoomState(session, userId));
-            const activePlayers = [...session.users.values()].filter((p) => p.status !== 'LEFT');
-            const allAnswered = activePlayers.length > 0 &&
-                activePlayers.every((p) => p.hasAnsweredCurrentQuestion);
-            if (allAnswered) {
-                void this.advanceQuestion(roomId);
-            }
             return;
         }
         catch (error) {
@@ -1545,16 +1444,8 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
             return;
         user.status = 'LEFT';
         user.ready = false;
-        await this.playerGameStateService.leaveGame(userId);
         this.rankingService.updateRanking(session);
         await this.saveSessionToRedis(session);
-        const activeRemaining = [...session.users.values()].filter((u) => u.status !== 'LEFT');
-        if (session.room.status === 'PLAYING' && activeRemaining.length === 0) {
-            await this.finishMatch(session);
-            return;
-        }
-        const remainingUserIds = activeRemaining.map((u) => u.userId);
-        await this.broadcastToRoom(remainingUserIds, 'battle:player-left', this.createRoomState(session));
     }
     async isRoomExpired(session) {
         const status = session.room.status;
@@ -1593,6 +1484,7 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
     async saveSessionToRedis(session, ttlOverrideMs) {
         const data = {
             room: session.room,
+            messages: session.messages,
             users: [...session.users.values()].map((user) => ({
                 ...user,
                 answeredQuestionIds: [...user.answeredQuestionIds],
@@ -1644,8 +1536,29 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
         }
         return code;
     }
-    generateMessageId() {
-        return Math.random().toString(36).substring(2, 10);
+    async finishMatch(session) {
+        if (session.room.status === 'FINISHED')
+            return;
+        session.room.status = 'FINISHED';
+        session.room.finishedAt = Date.now();
+        session.room.currentQuestionId = undefined;
+        session.room.questionStartedAt = undefined;
+        session.room.questionEndsAt = undefined;
+        if (session.timer) {
+            clearTimeout(session.timer);
+            session.timer = undefined;
+        }
+        this.rankingService.updateRanking(session);
+        await this.saveSessionToRedis(session, 5 * 60 * 1000);
+        const players = [...session.users.values()];
+        await Promise.all(players.map((player) => this.playerGameStateService.leaveGame(player.userId)));
+        const userIds = players.map((p) => p.userId);
+        await this.broadcastToRoom(userIds, 'battle:finished', this.createRoomState(session));
+    }
+    async broadcastToRoom(userIds, event, payload) {
+        if (!userIds.length)
+            return;
+        await this.eventsService.emitToUsers(userIds, event, payload);
     }
 };
 exports.QuizBattleService = QuizBattleService;
@@ -1653,6 +1566,341 @@ exports.QuizBattleService = QuizBattleService = QuizBattleService_1 = __decorate
     (0, common_1.Injectable)(),
     __metadata("design:paramtypes", [typeof (_a = typeof redis_1.RedisService !== "undefined" && redis_1.RedisService) === "function" ? _a : Object, typeof (_b = typeof quiz_battle_question_service_1.QuizBattleQuestionService !== "undefined" && quiz_battle_question_service_1.QuizBattleQuestionService) === "function" ? _b : Object, typeof (_c = typeof quiz_battle_ranking_service_1.QuizBattleRankingService !== "undefined" && quiz_battle_ranking_service_1.QuizBattleRankingService) === "function" ? _c : Object, typeof (_d = typeof player_game_state_service_1.PlayerGameStateService !== "undefined" && player_game_state_service_1.PlayerGameStateService) === "function" ? _d : Object, typeof (_e = typeof events_service_1.EventsService !== "undefined" && events_service_1.EventsService) === "function" ? _e : Object])
 ], QuizBattleService);
+
+
+/***/ },
+
+/***/ "./apps/quiz-battle-service/src/services/_Questions.ts"
+/*!*************************************************************!*\
+  !*** ./apps/quiz-battle-service/src/services/_Questions.ts ***!
+  \*************************************************************/
+(__unused_webpack_module, exports) {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports._Questions = void 0;
+exports._Questions = [
+    {
+        "id": "question_1790361992593_0_3sqfnt",
+        "index": 0,
+        "type": "MCQ",
+        "difficulty": "MEDIUM",
+        "topic": "General Knowledge",
+        "question": "Which planet is known as the Red Planet?",
+        "media": null,
+        "options": [
+            {
+                "id": "option_1790361992593_0_0_va3yaz",
+                "text": "Venus"
+            },
+            {
+                "id": "option_1790361992593_0_1_izhrqf",
+                "text": "Mars"
+            },
+            {
+                "id": "option_1790361992593_0_2_dlud9h",
+                "text": "Jupiter"
+            },
+            {
+                "id": "option_1790361992593_0_3_lst72t",
+                "text": "Saturn"
+            }
+        ],
+        "correctOptionId": "option_1790361992593_0_1_izhrqf",
+        "points": 20,
+        "timeLimitSeconds": 20,
+        "status": "WAITING",
+        "explanation": "Mars is called the Red Planet because iron minerals in its soil oxidize, or rust, causing the soil and atmosphere to look red."
+    },
+    {
+        "id": "question_1790361992593_1_j7xkjb",
+        "index": 1,
+        "type": "MCQ",
+        "difficulty": "MEDIUM",
+        "topic": "General Knowledge",
+        "question": "What is the largest ocean on Earth?",
+        "media": null,
+        "options": [
+            {
+                "id": "option_1790361992593_1_0_wmx3li",
+                "text": "Atlantic Ocean"
+            },
+            {
+                "id": "option_1790361992593_1_1_1vweqj",
+                "text": "Indian Ocean"
+            },
+            {
+                "id": "option_1790361992593_1_2_yvq0cj",
+                "text": "Arctic Ocean"
+            },
+            {
+                "id": "option_1790361992593_1_3_x00mds",
+                "text": "Pacific Ocean"
+            }
+        ],
+        "correctOptionId": "option_1790361992593_1_3_x00mds",
+        "points": 20,
+        "timeLimitSeconds": 20,
+        "status": "WAITING",
+        "explanation": "The Pacific Ocean is the largest and deepest ocean on Earth, covering more than 60 million square miles."
+    },
+    {
+        "id": "question_1790361992593_2_d0mqqv",
+        "index": 2,
+        "type": "MCQ",
+        "difficulty": "MEDIUM",
+        "topic": "General Knowledge",
+        "question": "Who wrote the play 'Romeo and Juliet'?",
+        "media": null,
+        "options": [
+            {
+                "id": "option_1790361992593_2_0_9iv168",
+                "text": "Charles Dickens"
+            },
+            {
+                "id": "option_1790361992593_2_1_6r9wfs",
+                "text": "William Shakespeare"
+            },
+            {
+                "id": "option_1790361992593_2_2_8r8tgo",
+                "text": "Jane Austen"
+            },
+            {
+                "id": "option_1790361992593_2_3_km2d0r",
+                "text": "Mark Twain"
+            }
+        ],
+        "correctOptionId": "option_1790361992593_2_1_6r9wfs",
+        "points": 20,
+        "timeLimitSeconds": 20,
+        "status": "WAITING",
+        "explanation": "William Shakespeare wrote the tragedy 'Romeo and Juliet' around 1595."
+    },
+    {
+        "id": "question_1790361992593_3_emboor",
+        "index": 3,
+        "type": "MCQ",
+        "difficulty": "MEDIUM",
+        "topic": "General Knowledge",
+        "question": "What is the capital city of Japan?",
+        "media": null,
+        "options": [
+            {
+                "id": "option_1790361992593_3_0_rfj0a2",
+                "text": "Osaka"
+            },
+            {
+                "id": "option_1790361992593_3_1_m05ydh",
+                "text": "Kyoto"
+            },
+            {
+                "id": "option_1790361992593_3_2_a0t27y",
+                "text": "Tokyo"
+            },
+            {
+                "id": "option_1790361992593_3_3_tifz7n",
+                "text": "Nagoya"
+            }
+        ],
+        "correctOptionId": "option_1790361992593_3_2_a0t27y",
+        "points": 20,
+        "timeLimitSeconds": 20,
+        "status": "WAITING",
+        "explanation": "Tokyo has been the capital of Japan since 1868, when Emperor Meiji moved the capital from Kyoto."
+    },
+    {
+        "id": "question_1790361992593_4_rft887",
+        "index": 4,
+        "type": "MCQ",
+        "difficulty": "MEDIUM",
+        "topic": "General Knowledge",
+        "question": "Which gas do plants primarily absorb from the atmosphere for photosynthesis?",
+        "media": null,
+        "options": [
+            {
+                "id": "option_1790361992593_4_0_8yo2jv",
+                "text": "Oxygen"
+            },
+            {
+                "id": "option_1790361992593_4_1_f7kzj3",
+                "text": "Nitrogen"
+            },
+            {
+                "id": "option_1790361992593_4_2_tfs7f1",
+                "text": "Carbon Dioxide"
+            },
+            {
+                "id": "option_1790361992593_4_3_i3n7kq",
+                "text": "Hydrogen"
+            }
+        ],
+        "correctOptionId": "option_1790361992593_4_2_tfs7f1",
+        "points": 20,
+        "timeLimitSeconds": 20,
+        "status": "WAITING",
+        "explanation": "Plants absorb carbon dioxide (CO2) from the atmosphere and use it, along with water and sunlight, to produce glucose during photosynthesis."
+    },
+    {
+        "id": "question_1790361992593_5_k9m2xp",
+        "index": 5,
+        "type": "MCQ",
+        "difficulty": "MEDIUM",
+        "topic": "General Knowledge",
+        "question": "Who was the first person to walk on the Moon?",
+        "media": null,
+        "options": [
+            {
+                "id": "option_1790361992593_5_0_q1w2e3",
+                "text": "Buzz Aldrin"
+            },
+            {
+                "id": "option_1790361992593_5_1_r4t5y6",
+                "text": "Yuri Gagarin"
+            },
+            {
+                "id": "option_1790361992593_5_2_u7i8o9",
+                "text": "Neil Armstrong"
+            },
+            {
+                "id": "option_1790361992593_5_3_p0a1s2",
+                "text": "Michael Collins"
+            }
+        ],
+        "correctOptionId": "option_1790361992593_5_2_u7i8o9",
+        "points": 20,
+        "timeLimitSeconds": 20,
+        "status": "WAITING",
+        "explanation": "Neil Armstrong became the first human to walk on the Moon on July 20, 1969, during the Apollo 11 mission."
+    },
+    {
+        "id": "question_1790361992593_6_d3f4g5",
+        "index": 6,
+        "type": "MCQ",
+        "difficulty": "MEDIUM",
+        "topic": "General Knowledge",
+        "question": "What is the smallest country in the world by land area?",
+        "media": null,
+        "options": [
+            {
+                "id": "option_1790361992593_6_0_h6j7k8",
+                "text": "Monaco"
+            },
+            {
+                "id": "option_1790361992593_6_1_l9m0n1",
+                "text": "Nauru"
+            },
+            {
+                "id": "option_1790361992593_6_2_o2p3q4",
+                "text": "Vatican City"
+            },
+            {
+                "id": "option_1790361992593_6_3_r5s6t7",
+                "text": "San Marino"
+            }
+        ],
+        "correctOptionId": "option_1790361992593_6_2_o2p3q4",
+        "points": 20,
+        "timeLimitSeconds": 20,
+        "status": "WAITING",
+        "explanation": "Vatican City is the smallest country in the world, with an area of approximately 44 hectares (110 acres)."
+    },
+    {
+        "id": "question_1790361992593_7_u8v9w0",
+        "index": 7,
+        "type": "MCQ",
+        "difficulty": "MEDIUM",
+        "topic": "General Knowledge",
+        "question": "Which element has the chemical symbol 'Au'?",
+        "media": null,
+        "options": [
+            {
+                "id": "option_1790361992593_7_0_x1y2z3",
+                "text": "Silver"
+            },
+            {
+                "id": "option_1790361992593_7_1_a4b5c6",
+                "text": "Gold"
+            },
+            {
+                "id": "option_1790361992593_7_2_d7e8f9",
+                "text": "Aluminum"
+            },
+            {
+                "id": "option_1790361992593_7_3_g0h1i2",
+                "text": "Argon"
+            }
+        ],
+        "correctOptionId": "option_1790361992593_7_1_a4b5c6",
+        "points": 20,
+        "timeLimitSeconds": 20,
+        "status": "WAITING",
+        "explanation": "The chemical symbol 'Au' comes from the Latin word 'aurum', which means gold."
+    },
+    {
+        "id": "question_1790361992593_8_j3k4l5",
+        "index": 8,
+        "type": "MCQ",
+        "difficulty": "MEDIUM",
+        "topic": "General Knowledge",
+        "question": "How many continents are there on Earth?",
+        "media": null,
+        "options": [
+            {
+                "id": "option_1790361992593_8_0_m6n7o8",
+                "text": "5"
+            },
+            {
+                "id": "option_1790361992593_8_1_p9q0r1",
+                "text": "6"
+            },
+            {
+                "id": "option_1790361992593_8_2_s2t3u4",
+                "text": "7"
+            },
+            {
+                "id": "option_1790361992593_8_3_v5w6x7",
+                "text": "8"
+            }
+        ],
+        "correctOptionId": "option_1790361992593_8_2_s2t3u4",
+        "points": 20,
+        "timeLimitSeconds": 20,
+        "status": "WAITING",
+        "explanation": "There are 7 continents: Asia, Africa, North America, South America, Antarctica, Europe, and Australia (Oceania)."
+    },
+    {
+        "id": "question_1790361992593_9_y8z9a0",
+        "index": 9,
+        "type": "MCQ",
+        "difficulty": "MEDIUM",
+        "topic": "General Knowledge",
+        "question": "What is the longest river in the world?",
+        "media": null,
+        "options": [
+            {
+                "id": "option_1790361992593_9_0_b1c2d3",
+                "text": "Amazon River"
+            },
+            {
+                "id": "option_1790361992593_9_1_e4f5g6",
+                "text": "Yangtze River"
+            },
+            {
+                "id": "option_1790361992593_9_2_h7i8j9",
+                "text": "Mississippi River"
+            },
+            {
+                "id": "option_1790361992593_9_3_k0l1m2",
+                "text": "Nile River"
+            }
+        ],
+        "correctOptionId": "option_1790361992593_9_3_k0l1m2",
+        "points": 20,
+        "timeLimitSeconds": 20,
+        "status": "WAITING",
+        "explanation": "The Nile River is traditionally considered the longest river in the world, stretching about 6,650 km (4,130 miles) through northeastern Africa."
+    }
+];
 
 
 /***/ },
@@ -1748,14 +1996,11 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 var QuizBattleQuestionService_1;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.QuizBattleQuestionService = void 0;
 const common_1 = __webpack_require__(/*! @nestjs/common */ "@nestjs/common");
-const openai_1 = __importDefault(__webpack_require__(/*! openai */ "openai"));
+const genai_1 = __webpack_require__(/*! @google/genai */ "@google/genai");
 let QuizBattleQuestionService = QuizBattleQuestionService_1 = class QuizBattleQuestionService {
     logger = new common_1.Logger(QuizBattleQuestionService_1.name);
     ai;
@@ -1763,36 +2008,36 @@ let QuizBattleQuestionService = QuizBattleQuestionService_1 = class QuizBattleQu
     maxRetries;
     timeoutMs;
     constructor() {
-        const apiKey = process.env.OPENROUTER_API_KEY;
+        const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) {
-            throw new Error('OPENROUTER_API_KEY is not configured');
+            throw new Error('GEMINI_API_KEY is not configured');
         }
-        this.model =
-            process.env.OPENROUTER_MODEL ||
-                'google/gemma-3-27b-it:free';
-        this.maxRetries = Math.max(1, Number(process.env.OPENROUTER_MAX_RETRIES || 2));
-        this.timeoutMs = Math.max(10_000, Number(process.env.OPENROUTER_TIMEOUT_MS || 60_000));
-        this.ai = new openai_1.default({
+        this.model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+        this.maxRetries = Math.max(1, Number(process.env.GEMINI_MAX_RETRIES || 2));
+        this.timeoutMs = Math.max(10_000, Number(process.env.GEMINI_TIMEOUT_MS || 60_000));
+        this.ai = new genai_1.GoogleGenAI({
             apiKey,
-            baseURL: 'https://openrouter.ai/api/v1',
-            defaultHeaders: {
-                'HTTP-Referer': 'https://quizbattle.app',
-                'X-Title': 'QuizBattle',
-            },
         });
-        this.logger.log(`OpenRouter initialized | model=${this.model} | retries=${this.maxRetries} | timeout=${this.timeoutMs}ms`);
+        this.logger.log(`Gemini initialized | model=${this.model} | retries=${this.maxRetries} | timeout=${this.timeoutMs}ms`);
     }
     async generateQuestions(options = {}, room) {
         const count = this.normalizeCount(options.count);
         const difficulty = this.normalizeDifficulty(options.difficulty);
-        const topic = this.cleanText(options.topic) ||
-            'General Knowledge';
+        const topic = this.cleanText(options.topic) || 'General Knowledge';
         const prompt = this.cleanText(options.prompt) || '';
-        const mode = this.cleanText(options.mode) ||
-            'STANDARD';
+        const mode = this.cleanText(options.mode) || 'STANDARD';
+        const numberOfQuestions = options.numberOfQuestions ?? 5;
         this.logger.log(`Generating quiz | count=${count} | difficulty=${difficulty} | topic="${topic}" | mode="${mode}"`);
         try {
-            const questions = await this.createDummyQuestions();
+            const aiResponse = await this.requestQuestionsFromAI({
+                count,
+                difficulty,
+                topic,
+                prompt,
+                mode,
+                numberOfQuestions,
+            });
+            const questions = this.transformQuestions(aiResponse.questions, difficulty, topic);
             if (questions.length !== count) {
                 throw new Error(`Expected ${count} questions but received ${questions.length}`);
             }
@@ -1800,9 +2045,7 @@ let QuizBattleQuestionService = QuizBattleQuestionService_1 = class QuizBattleQu
             return questions;
         }
         catch (error) {
-            this.logger.error('OpenRouter quiz generation failed', error instanceof Error
-                ? error.stack
-                : String(error));
+            this.logger.error('Gemini quiz generation failed', error instanceof Error ? error.stack : String(error));
             throw new common_1.InternalServerErrorException('Unable to generate quiz questions right now. Please try again.');
         }
     }
@@ -1812,26 +2055,14 @@ let QuizBattleQuestionService = QuizBattleQuestionService_1 = class QuizBattleQu
         let lastError;
         for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
             try {
-                this.logger.log(`OpenRouter request attempt ${attempt}/${this.maxRetries}`);
-                const response = await this.generateContentWithTimeout(systemPrompt, userPrompt);
-                const modelUsed = response.model;
-                const finishReason = response.choices?.[0]
-                    ?.finish_reason;
-                const message = response.choices?.[0]?.message;
-                const content = typeof message?.content === 'string'
-                    ? message.content
-                    : '';
-                this.logger.debug(`OpenRouter model used: ${modelUsed}`);
-                this.logger.debug(`OpenRouter finish reason: ${finishReason}`);
-                this.logger.debug(`OpenRouter response length: ${content.length}`);
+                this.logger.log(`Gemini request attempt ${attempt}/${this.maxRetries}`);
+                const content = await this.generateContentWithTimeout(systemPrompt, userPrompt);
+                this.logger.debug(`Gemini response length: ${content.length}`);
                 if (!content.trim()) {
-                    throw new Error('OpenRouter returned an empty response');
+                    throw new Error('Gemini returned an empty response');
                 }
-                if (content
-                    .trim()
-                    .toLowerCase()
-                    .startsWith('user safety:')) {
-                    throw new Error(`OpenRouter provider returned safety response instead of quiz JSON: ${content}`);
+                if (content.trim().toLowerCase().startsWith('user safety:')) {
+                    throw new Error(`Gemini returned a safety response instead of quiz JSON: ${content}`);
                 }
                 const jsonText = this.cleanJsonResponse(content);
                 let parsed;
@@ -1839,9 +2070,9 @@ let QuizBattleQuestionService = QuizBattleQuestionService_1 = class QuizBattleQu
                     parsed = JSON.parse(jsonText);
                 }
                 catch (error) {
-                    this.logger.error(`Invalid JSON returned by OpenRouter`);
+                    this.logger.error(`Invalid JSON returned by Gemini`);
                     this.logger.error(`Raw response: ${content}`);
-                    throw new Error(`OpenRouter returned invalid JSON`);
+                    throw new Error(`Gemini returned invalid JSON`);
                 }
                 this.validateAIResponse(parsed, params.count);
                 return parsed;
@@ -1849,21 +2080,16 @@ let QuizBattleQuestionService = QuizBattleQuestionService_1 = class QuizBattleQu
             catch (error) {
                 lastError = error;
                 const retryable = this.isRetryableError(error);
-                this.logger.warn(`OpenRouter attempt ${attempt} failed | retryable=${retryable} | error=${error instanceof Error
-                    ? error.message
-                    : String(error)}`);
-                if (!retryable ||
-                    attempt >= this.maxRetries) {
+                this.logger.warn(`Gemini attempt ${attempt} failed | retryable=${retryable} | error=${error instanceof Error ? error.message : String(error)}`);
+                if (!retryable || attempt >= this.maxRetries) {
                     break;
                 }
                 const delay = this.calculateBackoff(attempt);
-                this.logger.warn(`Retrying OpenRouter request in ${delay}ms...`);
+                this.logger.warn(`Retrying Gemini request in ${delay}ms...`);
                 await this.sleep(delay);
             }
         }
-        throw lastError instanceof Error
-            ? lastError
-            : new Error(String(lastError));
+        throw lastError instanceof Error ? lastError : new Error(String(lastError));
     }
     async generateContentWithTimeout(systemPrompt, userPrompt) {
         const controller = new AbortController();
@@ -1871,28 +2097,28 @@ let QuizBattleQuestionService = QuizBattleQuestionService_1 = class QuizBattleQu
             controller.abort();
         }, this.timeoutMs);
         try {
-            return await this.ai.chat.completions.create({
+            const responsePromise = this.ai.models.generateContent({
                 model: this.model,
-                messages: [
-                    {
-                        role: 'system',
-                        content: systemPrompt,
-                    },
-                    {
-                        role: 'user',
-                        content: userPrompt,
-                    },
-                ],
-                temperature: 0.7,
-                max_tokens: 8000,
-            }, {
-                signal: controller.signal,
+                contents: userPrompt,
+                config: {
+                    systemInstruction: systemPrompt,
+                    temperature: 0.7,
+                    maxOutputTokens: 8000,
+                    responseMimeType: 'application/json',
+                },
             });
+            const timeoutPromise = new Promise((_resolve, reject) => {
+                controller.signal.addEventListener('abort', () => {
+                    reject(new Error(`Gemini request timed out after ${this.timeoutMs}ms`));
+                });
+            });
+            const response = await Promise.race([responsePromise, timeoutPromise]);
+            const text = response.text;
+            return typeof text === 'string' ? text : '';
         }
         catch (error) {
-            if (error instanceof Error &&
-                error.name === 'AbortError') {
-                throw new Error(`OpenRouter request timed out after ${this.timeoutMs}ms`);
+            if (error instanceof Error && error.message.includes('timed out')) {
+                throw error;
             }
             throw error;
         }
@@ -2060,37 +2286,29 @@ Return the JSON now.
         text = text.trim();
         const firstBrace = text.indexOf('{');
         const lastBrace = text.lastIndexOf('}');
-        if (firstBrace !== -1 &&
-            lastBrace !== -1 &&
-            lastBrace > firstBrace) {
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
             text = text.substring(firstBrace, lastBrace + 1);
         }
         return text.trim();
     }
     validateAIResponse(response, expectedCount) {
-        if (!response ||
-            typeof response !== 'object') {
+        if (!response || typeof response !== 'object') {
             throw new Error('AI response is not an object');
         }
         const data = response;
         if (!Array.isArray(data.questions)) {
             throw new Error('AI response does not contain questions array');
         }
-        if (data.questions.length !==
-            expectedCount) {
+        if (data.questions.length !== expectedCount) {
             throw new Error(`Expected ${expectedCount} questions but received ${data.questions.length}`);
         }
         const questionSet = new Set();
         data.questions.forEach((rawQuestion, index) => {
-            if (!rawQuestion ||
-                typeof rawQuestion !==
-                    'object') {
+            if (!rawQuestion || typeof rawQuestion !== 'object') {
                 throw new Error(`Question ${index + 1} is invalid`);
             }
             const question = rawQuestion;
-            if (typeof question.question !==
-                'string' ||
-                !question.question.trim()) {
+            if (typeof question.question !== 'string' || !question.question.trim()) {
                 throw new Error(`Question ${index + 1} has invalid text`);
             }
             const normalizedQuestion = this.normalizeForDuplicateCheck(question.question);
@@ -2106,9 +2324,7 @@ Return the JSON now.
             }
             const optionSet = new Set();
             question.options.forEach((option, optionIndex) => {
-                if (typeof option !==
-                    'string' ||
-                    !option.trim()) {
+                if (typeof option !== 'string' || !option.trim()) {
                     throw new Error(`Question ${index + 1} option ${optionIndex + 1} is invalid`);
                 }
                 const normalizedOption = this.normalizeForDuplicateCheck(option);
@@ -2117,19 +2333,15 @@ Return the JSON now.
                 }
                 optionSet.add(normalizedOption);
             });
-            if (typeof question.correctOptionIndex !==
-                'number') {
+            if (typeof question.correctOptionIndex !== 'number') {
                 throw new Error(`Question ${index + 1} has invalid correctOptionIndex`);
             }
             if (!Number.isInteger(question.correctOptionIndex) ||
-                question.correctOptionIndex <
-                    0 ||
-                question.correctOptionIndex >
-                    3) {
+                question.correctOptionIndex < 0 ||
+                question.correctOptionIndex > 3) {
                 throw new Error(`Question ${index + 1} correctOptionIndex must be 0-3`);
             }
-            if (typeof question.explanation !==
-                'string' ||
+            if (typeof question.explanation !== 'string' ||
                 !question.explanation.trim()) {
                 throw new Error(`Question ${index + 1} has invalid explanation`);
             }
@@ -2160,14 +2372,6 @@ Return the JSON now.
                 timeLimitSeconds: settings.timeLimitSeconds,
                 status: 'WAITING',
                 explanation: aiQuestion.explanation.trim(),
-                stats: {
-                    totalAnswered: 0,
-                    correctCount: 0,
-                    optionDistribution: options.reduce((distribution, option) => {
-                        distribution[option.id] = 0;
-                        return distribution;
-                    }, {}),
-                },
             };
             return question;
         });
@@ -2197,9 +2401,7 @@ Return the JSON now.
             'question',
             Date.now(),
             index,
-            Math.random()
-                .toString(36)
-                .substring(2, 8),
+            Math.random().toString(36).substring(2, 8),
         ].join('_');
     }
     generateOptionId(questionIndex, optionIndex) {
@@ -2208,25 +2410,18 @@ Return the JSON now.
             Date.now(),
             questionIndex,
             optionIndex,
-            Math.random()
-                .toString(36)
-                .substring(2, 8),
+            Math.random().toString(36).substring(2, 8),
         ].join('_');
     }
     normalizeCount(count) {
-        if (typeof count !== 'number' ||
-            !Number.isFinite(count)) {
+        if (typeof count !== 'number' || !Number.isFinite(count)) {
             return 5;
         }
         return Math.min(50, Math.max(1, Math.floor(count)));
     }
     normalizeDifficulty(difficulty) {
-        const value = difficulty
-            ?.trim()
-            .toUpperCase();
-        if (value === 'EASY' ||
-            value === 'MEDIUM' ||
-            value === 'HARD') {
+        const value = difficulty?.trim().toUpperCase();
+        if (value === 'EASY' || value === 'MEDIUM' || value === 'HARD') {
             return value;
         }
         return 'MEDIUM';
@@ -2236,9 +2431,7 @@ Return the JSON now.
             return undefined;
         }
         const result = value.trim();
-        return result.length
-            ? result
-            : undefined;
+        return result.length ? result : undefined;
     }
     normalizeForDuplicateCheck(value) {
         return value
@@ -2270,78 +2463,23 @@ Return the JSON now.
             message.includes('503') ||
             message.includes('504') ||
             message.includes('rate limit') ||
+            message.includes('resource_exhausted') ||
             message.includes('temporarily unavailable')) {
             return true;
         }
-        if (message.includes('invalid json') ||
-            message.includes('user safety:')) {
+        if (message.includes('invalid json') || message.includes('user safety:')) {
             return false;
         }
         return false;
     }
     calculateBackoff(attempt) {
         const base = 1000;
-        const exponential = base *
-            Math.pow(2, attempt - 1);
+        const exponential = base * Math.pow(2, attempt - 1);
         const jitter = Math.floor(Math.random() * 500);
         return Math.min(8000, exponential + jitter);
     }
     async sleep(milliseconds) {
         await new Promise((resolve) => setTimeout(resolve, milliseconds));
-    }
-    async createDummyQuestions() {
-        await this.sleep(2000);
-        return Array.from({ length: 5 }, (_, index) => this.createDummyQuestion(index));
-    }
-    createDummyQuestion(index) {
-        const question = {
-            id: this.generateQuestionId(index),
-            index,
-            type: 'MCQ',
-            difficulty: 'MEDIUM',
-            topic: 'General Knowledge',
-            question: `This is dummy question ${index + 1}.`,
-            media: null,
-            options: [
-                {
-                    id: this.generateOptionId(index, 0),
-                    text: `Question ${index + 1} - Option 1`,
-                },
-                {
-                    id: this.generateOptionId(index, 1),
-                    text: `Question ${index + 1} - Option 2`,
-                },
-                {
-                    id: this.generateOptionId(index, 2),
-                    text: `Question ${index + 1} - Option 3`,
-                },
-                {
-                    id: this.generateOptionId(index, 3),
-                    text: `Question ${index + 1} - Option 4`,
-                },
-            ],
-            correctOptionId: this.generateOptionId(index, 0),
-            points: 20,
-            timeLimitSeconds: 20,
-            status: 'WAITING',
-            explanation: `Option 1 is the correct answer for dummy question ${index + 1}.`,
-            stats: {
-                totalAnswered: 0,
-                correctCount: 0,
-                optionDistribution: {},
-            },
-        };
-        const stats = question.stats ?? {
-            totalAnswered: 0,
-            correctCount: 0,
-            optionDistribution: {},
-        };
-        stats.optionDistribution ??= {};
-        question.stats = stats;
-        question.options.forEach((option) => {
-            stats.optionDistribution[option.id] = 0;
-        });
-        return question;
     }
 };
 exports.QuizBattleQuestionService = QuizBattleQuestionService;
@@ -2799,6 +2937,16 @@ exports.RedisService = RedisService = RedisService_1 = __decorate([
 
 /***/ },
 
+/***/ "@google/genai"
+/*!********************************!*\
+  !*** external "@google/genai" ***!
+  \********************************/
+(module) {
+
+module.exports = require("@google/genai");
+
+/***/ },
+
 /***/ "@nestjs/common"
 /*!*********************************!*\
   !*** external "@nestjs/common" ***!
@@ -2886,16 +3034,6 @@ module.exports = require("class-validator");
 (module) {
 
 module.exports = require("ioredis");
-
-/***/ },
-
-/***/ "openai"
-/*!*************************!*\
-  !*** external "openai" ***!
-  \*************************/
-(module) {
-
-module.exports = require("openai");
 
 /***/ },
 
