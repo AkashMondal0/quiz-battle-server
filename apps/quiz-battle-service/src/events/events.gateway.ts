@@ -10,9 +10,10 @@ import { Logger, UsePipes, ValidationPipe } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { EventsService } from './events.service';
 import { QuizBattleService } from '../quiz-battle-service.service';
-import { AckResponse } from '../interface/room-session.interface';
+import { AckResponse, BattleMessage } from '../interface/room-session.interface';
 import {
   AnswerDto,
+  BattleMessageDto,
   CreateRoomDto,
   JoinRoomDto,
   ReadyDto,
@@ -230,21 +231,18 @@ export class EventsGateway {
     data: JoinRoomDto,
   ) {
     const user = this.eventsService.extractUserFromSocket(client);
-    // Fixed: this was previously `requestId: data.roomId` - the ack's
-    // requestId field was silently being filled with the room id because
-    // the join payload never actually carried a requestId.
     const requestId = data.requestId ?? this.eventsService.generateRequestId();
 
     if (!user) {
       this.logger.warn(`Invalid user information for client: ${client.id}`);
-      // this.handleError(`An error occurred while joining the room`, client);
-      ack({
-        success: false,
-        status: 'NOT_FOUND',
-        message: 'An error occurred while joining the room',
-        requestId: requestId,
-        serverTime: Date.now(),
-      });
+      this.handleError(`An error occurred while joining the room`, client);
+      // ack({
+      //   success: false,
+      //   status: 'NOT_FOUND',
+      //   message: 'An error occurred while joining the room',
+      //   requestId: requestId,
+      //   serverTime: Date.now(),
+      // });
       return;
     }
 
@@ -266,23 +264,23 @@ export class EventsGateway {
         this.server.to(socketIds).emit('battle:lobby', state);
         // join user to the room
         client.emit('battle:joined-response', state);
-        ack({
-          success: true,
-          status: 'OK',
-          message: 'Joined room successfully',
-          requestId: requestId,
-          serverTime: Date.now(),
-        });
+        // ack({
+        //   success: true,
+        //   status: 'OK',
+        //   message: 'Joined room successfully',
+        //   requestId: requestId,
+        //   serverTime: Date.now(),
+        // });
       },
       (errorMessage) => {
-        // this.handleError(errorMessage, client);
-        ack({
-          success: false,
-          status: 'SERVER_ERROR',
-          message: errorMessage,
-          requestId: requestId,
-          serverTime: Date.now(),
-        });
+        this.handleError(errorMessage, client);
+        // ack({
+        //   success: false,
+        //   status: 'SERVER_ERROR',
+        //   message: errorMessage,
+        //   requestId: requestId,
+        //   serverTime: Date.now(),
+        // });
       },
     );
   }
@@ -439,6 +437,43 @@ export class EventsGateway {
       async (state) => {
         const socketIds = await this.eventsService.findSocketIdsByUserIds(
           state.players.map((player) => player.userId),
+        );
+        this.server.to(socketIds).emit('battle:lobby-updated', state);
+      },
+      (errorMessage) => {
+        this.handleError(errorMessage, client);
+      },
+    );
+  }
+
+  @SubscribeMessage('battle:message')
+  handleMessage(
+    @ConnectedSocket()
+    client: Socket,
+    @MessageBody()
+    data: BattleMessageDto,
+  ) {
+    const user = this.eventsService.extractUserFromSocket(client);
+
+    if (!user) {
+      this.logger.warn(`Invalid user information for client: ${client.id}`);
+      this.handleError(`An error occurred while submitting a message`, client);
+      return;
+    }
+
+    this.quizBattleService.postMessage(
+      {
+        roomId: data.roomId,
+        message: data.message,
+        emoji: data.emoji,
+        system: false,
+        systemMessage: "A new message has been posted.",
+        ...user,
+      },
+      async (state) => {
+        const socketIds = await this.eventsService.findSocketIdsByUserIds(
+          state.players.map((player) => player.userId)
+          .filter((userId) => userId !== user.id),
         );
         this.server.to(socketIds).emit('battle:lobby-updated', state);
       },

@@ -1,13 +1,7 @@
 import { RedisService } from '@app/redis';
 import { Injectable, Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
-
-interface SocketUser {
-  id: string;
-  username: string;
-  avatar?: string;
-  avatarId?: string;
-}
+import { SocketUser } from '../interface/room-session.interface';
 
 @Injectable()
 export class EventsService {

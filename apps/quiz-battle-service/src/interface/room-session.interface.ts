@@ -2,7 +2,12 @@ export type RoomStatus =
   'WAITING' | 'COUNTDOWN' | 'PLAYING' | 'FINISHED' | 'CANCELLED';
 
 export type PlayerStatus = 'CONNECTED' | 'DISCONNECTED' | 'LEFT';
-
+export interface SocketUser {
+  id: string;
+  username: string;
+  avatar?: string;
+  avatarId?: string;
+}
 export interface QuestionOptionDto {
   id: string;
   text: string;
@@ -150,6 +155,7 @@ export interface RoomSession {
   users: Map<string, RoomSessionUser>;
 
   ranking: RoomRanking;
+  messages: BattleMessage[];
 
   questions: RoomQuestion[];
 
@@ -158,6 +164,19 @@ export interface RoomSession {
 
 export type BattlePhase =
   'IDLE' | 'LOBBY' | 'COUNTDOWN' | 'QUESTION' | 'FINISHED' | 'CANCELLED';
+
+export interface BattleMessage {
+  id: string;
+  userId: string;
+  username: string;
+  avatar?: string | null;
+  avatarId?: string | null;
+  message: string;
+  timestamp: number;
+  emoji: string;
+  system?: boolean;
+  systemMessage?: string;
+}
 
 export interface BattleState {
   phase: BattlePhase;
@@ -178,6 +197,7 @@ export interface BattleState {
 
   rankings: RankingUser[];
   questions: RoomQuestion[];
+  messages: BattleMessage[];
 
   errorEvent: string | null;
   errorMessage: string | null;

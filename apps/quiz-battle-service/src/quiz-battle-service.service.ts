@@ -5,12 +5,14 @@ import {
   RoomSession,
   RoomSessionDetails,
   RoomSessionUser,
+  SocketUser,
 } from './interface/room-session.interface';
 import { QuizBattleQuestionService } from './services/quiz-battle-question.service';
 import { QuizBattleRankingService } from './services/quiz-battle-ranking.service';
 import { PlayerGameStateService } from './services/player.game.state.service';
 import Redis from 'ioredis';
 import { EventsService } from './events/events.service';
+import { BattleMessageDto } from './interface/battle.dto';
 
 @Injectable()
 export class QuizBattleService {
@@ -31,17 +33,6 @@ export class QuizBattleService {
     private readonly questionService: QuizBattleQuestionService,
     private readonly rankingService: QuizBattleRankingService,
     private readonly playerGameStateService: PlayerGameStateService,
-    // NOTE ON MODULE WIRING: EventsService lives in EventsModule, and
-    // EventsModule's gateway already depends on QuizBattleService. Injecting
-    // EventsService here creates a module cycle (EventsModule <-> the module
-    // that provides QuizBattleService) unless you either:
-    //   1) wrap both sides in forwardRef(), e.g.
-    //        @Inject(forwardRef(() => EventsService)) private readonly eventsService: EventsService
-    //      and the equivalent forwardRef() in each module's `imports`, or
-    //   2) (recommended) pull EventsService (+ its Redis-backed socket
-    //      registry) out into its own small shared module that both
-    //      EventsModule and QuizBattleModule import - it has no dependency
-    //      on QuizBattleService, so this removes the cycle entirely.
     private readonly eventsService: EventsService,
   ) {}
 
@@ -359,6 +350,20 @@ export class QuizBattleService {
           updatedAt: now,
         },
         questions: questions,
+        messages: [
+          {
+            id: this.generateMessageId(),
+            userId: host.userId,
+            username: host.username,
+            avatar: host.avatar ?? null,
+            avatarId: host.avatarId ?? null,
+            message: `Room created by ${host.username}`,
+            timestamp: 0,
+            emoji: '',
+            system: true,
+            systemMessage: `Room created by ${host.username}`,
+          },
+        ],
       };
 
       this.rankingService.updateRanking(session);
@@ -459,9 +464,7 @@ export class QuizBattleService {
         await this.saveSessionToRedis(session);
         await this.playerGameStateService.enterGame(user.userId, roomId);
 
-        socketCallbackWithRoomState(
-          this.createRoomState(session, user.userId),
-        );
+        socketCallbackWithRoomState(this.createRoomState(session, user.userId));
         return;
       }
 
@@ -625,6 +628,44 @@ export class QuizBattleService {
       );
       onError?.('Failed to start match');
       return;
+    }
+  }
+
+  async postMessage(
+    data: BattleMessageDto & SocketUser,
+    socketCallbackWithRoomState: (state: BattleState) => void,
+    onError?: (message: string) => void,
+  ): Promise<void> {
+    try {
+      const session = await this.getRoom(data.roomId);
+      if (!session) {
+        onError?.('Room not found');
+        return;
+      }
+
+      // Add the message to the session
+      session.messages.push({
+        id: this.generateMessageId(),
+        userId: data.id,
+        username: data.username,
+        avatar: data.avatar ?? null,
+        avatarId: data.avatarId ?? null,
+        message: data.message,
+        emoji: data.emoji,
+        system: data.system,
+        systemMessage: data.systemMessage,
+        timestamp: Date.now(),
+      });
+
+      await this.saveSessionToRedis(session);
+
+      socketCallbackWithRoomState(this.createRoomState(session, data.id));
+    } catch (error) {
+      this.logger.error(
+        'Error posting message',
+        error instanceof Error ? error.stack : String(error),
+      );
+      onError?.('Failed to post message');
     }
   }
 
@@ -1029,6 +1070,7 @@ export class QuizBattleService {
       lastPointsEarned: 0,
       rankings: session.ranking.rankings,
       questions: session.questions,
+      messages: session.messages,
       errorEvent: null,
       errorMessage: null,
     };
@@ -1178,6 +1220,7 @@ export class QuizBattleService {
           updatedAt: Date.now(),
         },
         questions: parsed.questions ?? [],
+        messages: parsed.messages ?? [],
       };
     } catch (error) {
       this.logger.error(`Failed to restore room ${roomId}`, error);
@@ -1195,5 +1238,9 @@ export class QuizBattleService {
     }
 
     return code;
+  }
+
+  private generateMessageId(): string {
+    return Math.random().toString(36).substring(2, 10);
   }
 }

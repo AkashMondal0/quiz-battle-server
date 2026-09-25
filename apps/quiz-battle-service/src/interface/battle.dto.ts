@@ -88,3 +88,25 @@ export class AnswerDto {
   @MinLength(1)
   qId!: string;
 }
+
+export class BattleMessageDto {
+  @IsString()
+  @MinLength(6)
+  roomId!: string;
+
+  @IsString()
+  @MinLength(1)
+  message!: string;
+
+  @IsString()
+  @IsOptional()
+  emoji!: string;
+
+  @IsBoolean()
+  @IsOptional()
+  system?: boolean;
+
+  @IsString()
+  @IsOptional()
+  systemMessage?: string;
+}

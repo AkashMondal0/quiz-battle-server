@@ -76,7 +76,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
     return function (target, key) { decorator(target, key, paramIndex); }
 };
 var EventsGateway_1;
-var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r;
+var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m, _o, _p, _q, _r, _s, _t;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.EventsGateway = void 0;
 const websockets_1 = __webpack_require__(/*! @nestjs/websockets */ "@nestjs/websockets");
@@ -205,13 +205,7 @@ let EventsGateway = EventsGateway_1 = class EventsGateway {
         const requestId = data.requestId ?? this.eventsService.generateRequestId();
         if (!user) {
             this.logger.warn(`Invalid user information for client: ${client.id}`);
-            ack({
-                success: false,
-                status: 'NOT_FOUND',
-                message: 'An error occurred while joining the room',
-                requestId: requestId,
-                serverTime: Date.now(),
-            });
+            this.handleError(`An error occurred while joining the room`, client);
             return;
         }
         this.quizBattleService.joinRoom(data.roomId, {
@@ -223,21 +217,8 @@ let EventsGateway = EventsGateway_1 = class EventsGateway {
             const socketIds = (await this.eventsService.findSocketIdsByUserIds(state.players.map((p) => p.userId))).filter((id) => id !== user.id);
             this.server.to(socketIds).emit('battle:lobby', state);
             client.emit('battle:joined-response', state);
-            ack({
-                success: true,
-                status: 'OK',
-                message: 'Joined room successfully',
-                requestId: requestId,
-                serverTime: Date.now(),
-            });
         }, (errorMessage) => {
-            ack({
-                success: false,
-                status: 'SERVER_ERROR',
-                message: errorMessage,
-                requestId: requestId,
-                serverTime: Date.now(),
-            });
+            this.handleError(errorMessage, client);
         });
     }
     handleReady(client, data) {
@@ -324,6 +305,28 @@ let EventsGateway = EventsGateway_1 = class EventsGateway {
             this.handleError(errorMessage, client);
         });
     }
+    handleMessage(client, data) {
+        const user = this.eventsService.extractUserFromSocket(client);
+        if (!user) {
+            this.logger.warn(`Invalid user information for client: ${client.id}`);
+            this.handleError(`An error occurred while submitting a message`, client);
+            return;
+        }
+        this.quizBattleService.postMessage({
+            roomId: data.roomId,
+            message: data.message,
+            emoji: data.emoji,
+            system: false,
+            systemMessage: "A new message has been posted.",
+            ...user,
+        }, async (state) => {
+            const socketIds = await this.eventsService.findSocketIdsByUserIds(state.players.map((player) => player.userId)
+                .filter((userId) => userId !== user.id));
+            this.server.to(socketIds).emit('battle:lobby-updated', state);
+        }, (errorMessage) => {
+            this.handleError(errorMessage, client);
+        });
+    }
 };
 exports.EventsGateway = EventsGateway;
 __decorate([
@@ -387,6 +390,14 @@ __decorate([
     __metadata("design:paramtypes", [typeof (_q = typeof socket_io_1.Socket !== "undefined" && socket_io_1.Socket) === "function" ? _q : Object, typeof (_r = typeof battle_dto_1.AnswerDto !== "undefined" && battle_dto_1.AnswerDto) === "function" ? _r : Object]),
     __metadata("design:returntype", void 0)
 ], EventsGateway.prototype, "handleAnswer", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('battle:message'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [typeof (_s = typeof socket_io_1.Socket !== "undefined" && socket_io_1.Socket) === "function" ? _s : Object, typeof (_t = typeof battle_dto_1.BattleMessageDto !== "undefined" && battle_dto_1.BattleMessageDto) === "function" ? _t : Object]),
+    __metadata("design:returntype", void 0)
+], EventsGateway.prototype, "handleMessage", null);
 exports.EventsGateway = EventsGateway = EventsGateway_1 = __decorate([
     (0, websockets_1.WebSocketGateway)({
         namespace: '/event',
@@ -556,7 +567,7 @@ var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.AnswerDto = exports.RoomIdDto = exports.ReadyDto = exports.JoinRoomDto = exports.CreateRoomDto = void 0;
+exports.BattleMessageDto = exports.AnswerDto = exports.RoomIdDto = exports.ReadyDto = exports.JoinRoomDto = exports.CreateRoomDto = void 0;
 const class_validator_1 = __webpack_require__(/*! class-validator */ "class-validator");
 class CreateRoomDto {
     requestId;
@@ -679,6 +690,39 @@ __decorate([
     (0, class_validator_1.MinLength)(1),
     __metadata("design:type", String)
 ], AnswerDto.prototype, "qId", void 0);
+class BattleMessageDto {
+    roomId;
+    message;
+    emoji;
+    system;
+    systemMessage;
+}
+exports.BattleMessageDto = BattleMessageDto;
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MinLength)(6),
+    __metadata("design:type", String)
+], BattleMessageDto.prototype, "roomId", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.MinLength)(1),
+    __metadata("design:type", String)
+], BattleMessageDto.prototype, "message", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsOptional)(),
+    __metadata("design:type", String)
+], BattleMessageDto.prototype, "emoji", void 0);
+__decorate([
+    (0, class_validator_1.IsBoolean)(),
+    (0, class_validator_1.IsOptional)(),
+    __metadata("design:type", Boolean)
+], BattleMessageDto.prototype, "system", void 0);
+__decorate([
+    (0, class_validator_1.IsString)(),
+    (0, class_validator_1.IsOptional)(),
+    __metadata("design:type", String)
+], BattleMessageDto.prototype, "systemMessage", void 0);
 
 
 /***/ },
@@ -1026,6 +1070,20 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
                     updatedAt: now,
                 },
                 questions: questions,
+                messages: [
+                    {
+                        id: this.generateMessageId(),
+                        userId: host.userId,
+                        username: host.username,
+                        avatar: host.avatar ?? null,
+                        avatarId: host.avatarId ?? null,
+                        message: `Room created by ${host.username}`,
+                        timestamp: 0,
+                        emoji: '',
+                        system: true,
+                        systemMessage: `Room created by ${host.username}`,
+                    },
+                ],
             };
             this.rankingService.updateRanking(session);
             this.sessions.set(session.room.roomId, session);
@@ -1199,6 +1257,33 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
             this.logger.error('Error starting room', error instanceof Error ? error.stack : String(error));
             onError?.('Failed to start match');
             return;
+        }
+    }
+    async postMessage(data, socketCallbackWithRoomState, onError) {
+        try {
+            const session = await this.getRoom(data.roomId);
+            if (!session) {
+                onError?.('Room not found');
+                return;
+            }
+            session.messages.push({
+                id: this.generateMessageId(),
+                userId: data.id,
+                username: data.username,
+                avatar: data.avatar ?? null,
+                avatarId: data.avatarId ?? null,
+                message: data.message,
+                emoji: data.emoji,
+                system: data.system,
+                systemMessage: data.systemMessage,
+                timestamp: Date.now(),
+            });
+            await this.saveSessionToRedis(session);
+            socketCallbackWithRoomState(this.createRoomState(session, data.id));
+        }
+        catch (error) {
+            this.logger.error('Error posting message', error instanceof Error ? error.stack : String(error));
+            onError?.('Failed to post message');
         }
     }
     getPerQuestionDurationMs(room) {
@@ -1441,6 +1526,7 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
             lastPointsEarned: 0,
             rankings: session.ranking.rankings,
             questions: session.questions,
+            messages: session.messages,
             errorEvent: null,
             errorMessage: null,
         };
@@ -1542,6 +1628,7 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
                     updatedAt: Date.now(),
                 },
                 questions: parsed.questions ?? [],
+                messages: parsed.messages ?? [],
             };
         }
         catch (error) {
@@ -1556,6 +1643,9 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
             code += characters[Math.floor(Math.random() * characters.length)];
         }
         return code;
+    }
+    generateMessageId() {
+        return Math.random().toString(36).substring(2, 10);
     }
 };
 exports.QuizBattleService = QuizBattleService;
