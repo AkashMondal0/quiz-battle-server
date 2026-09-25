@@ -357,7 +357,20 @@ export class QuizBattleService {
           updatedAt: now,
         },
         questions: questions,
-        messages: [],
+        messages: [
+          {
+            id: `message_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+            userId: 'system',
+            username: 'System',
+            avatar: "",
+            avatarId: "",
+            message: `${host.username} created the room`,
+            emoji: "🎉",
+            system: true,
+            systemMessage: `${host.username} created the room`,
+            timestamp: now,
+          }
+        ],
       };
 
       this.rankingService.updateRanking(session);
