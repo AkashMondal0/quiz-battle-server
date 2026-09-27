@@ -3,14 +3,8 @@ import {
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
-import { GoogleGenAI } from '@google/genai';
 
 import { RoomQuestion, RoomSession } from '../interface/room-session.interface';
-import { _Questions } from './_Questions';
-
-// ============================================================
-// TYPES
-// ============================================================
 
 type Difficulty = 'EASY' | 'MEDIUM' | 'HARD';
 
@@ -34,47 +28,57 @@ interface AIQuizResponse {
   questions: AIQuizQuestion[];
 }
 
-// ============================================================
-// SERVICE
-// ============================================================
+interface OpenRouterResponse {
+  id?: string;
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+    };
+    finish_reason?: string | null;
+  }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+  error?: {
+    message?: string;
+    code?: number;
+  };
+}
 
 @Injectable()
 export class QuizBattleQuestionService {
   private readonly logger = new Logger(QuizBattleQuestionService.name);
 
-  private readonly ai: GoogleGenAI;
-
+  private readonly apiKey: string;
   private readonly model: string;
-
+  private readonly baseUrl: string;
   private readonly maxRetries: number;
-
   private readonly timeoutMs: number;
 
   constructor() {
-    // Free API key from https://aistudio.google.com/apikey
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.OPENROUTER_API_KEY;
 
     if (!apiKey) {
-      throw new Error('GEMINI_API_KEY is not configured');
+      throw new Error('OPENROUTER_API_KEY is not configured');
     }
 
-    // gemini-2.5-flash and gemini-3.5-flash both have a free tier
-    // via Google AI Studio (no billing/card required).
-    this.model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-
-    this.maxRetries = Math.max(1, Number(process.env.GEMINI_MAX_RETRIES || 2));
-
+    this.apiKey = apiKey;
+    this.model = process.env.OPENROUTER_MODEL || 'openrouter/free';
+    this.baseUrl =
+      process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+    this.maxRetries = Math.max(
+      1,
+      Number(process.env.OPENROUTER_MAX_RETRIES || 2),
+    );
     this.timeoutMs = Math.max(
       10_000,
-      Number(process.env.GEMINI_TIMEOUT_MS || 60_000),
+      Number(process.env.OPENROUTER_TIMEOUT_MS || 60_000),
     );
 
-    this.ai = new GoogleGenAI({
-      apiKey,
-    });
-
     this.logger.log(
-      `Gemini initialized | model=${this.model} | retries=${this.maxRetries} | timeout=${this.timeoutMs}ms`,
+      `OpenRouter initialized | model=${this.model} | retries=${this.maxRetries} | timeout=${this.timeoutMs}ms`,
     );
   }
 
@@ -84,19 +88,13 @@ export class QuizBattleQuestionService {
 
   async generateQuestions(
     options: GenerateQuestionsOptions = {},
-    room?: RoomSession,
+    _room?: RoomSession,
   ): Promise<RoomQuestion[]> {
     const count = this.normalizeCount(options.count);
-
     const difficulty = this.normalizeDifficulty(options.difficulty);
-
     const topic = this.cleanText(options.topic) || 'General Knowledge';
-
     const prompt = this.cleanText(options.prompt) || '';
-
     const mode = this.cleanText(options.mode) || 'STANDARD';
-
-    const numberOfQuestions = options.numberOfQuestions ?? 5;
 
     this.logger.log(
       `Generating quiz | count=${count} | difficulty=${difficulty} | topic="${topic}" | mode="${mode}"`,
@@ -109,7 +107,6 @@ export class QuizBattleQuestionService {
         topic,
         prompt,
         mode,
-        numberOfQuestions,
       });
 
       const questions = this.transformQuestions(
@@ -129,7 +126,7 @@ export class QuizBattleQuestionService {
       return questions;
     } catch (error) {
       this.logger.error(
-        'Gemini quiz generation failed',
+        'OpenRouter quiz generation failed',
         error instanceof Error ? error.stack : String(error),
       );
 
@@ -140,7 +137,7 @@ export class QuizBattleQuestionService {
   }
 
   // ==========================================================
-  // GEMINI REQUEST
+  // OPENROUTER REQUEST
   // ==========================================================
 
   private async requestQuestionsFromAI(params: {
@@ -149,33 +146,27 @@ export class QuizBattleQuestionService {
     topic: string;
     prompt: string;
     mode: string;
-    numberOfQuestions?: number;
   }): Promise<AIQuizResponse> {
     const systemPrompt = this.buildSystemPrompt(params);
-
     const userPrompt = this.buildUserPrompt(params);
 
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       try {
-        this.logger.log(`Gemini request attempt ${attempt}/${this.maxRetries}`);
+        this.logger.log(
+          `OpenRouter request attempt ${attempt}/${this.maxRetries}`,
+        );
 
-        const content = await this.generateContentWithTimeout(
+        const response = await this.generateContentWithTimeout(
           systemPrompt,
           userPrompt,
         );
 
-        this.logger.debug(`Gemini response length: ${content.length}`);
+        const content = this.extractContent(response);
 
-        if (!content.trim()) {
-          throw new Error('Gemini returned an empty response');
-        }
-
-        if (content.trim().toLowerCase().startsWith('user safety:')) {
-          throw new Error(
-            `Gemini returned a safety response instead of quiz JSON: ${content}`,
-          );
+        if (!content) {
+          throw new Error('OpenRouter returned an empty response');
         }
 
         const jsonText = this.cleanJsonResponse(content);
@@ -184,15 +175,23 @@ export class QuizBattleQuestionService {
 
         try {
           parsed = JSON.parse(jsonText);
-        } catch (error) {
-          this.logger.error(`Invalid JSON returned by Gemini`);
+        } catch {
+          if (response.choices?.[0]?.finish_reason === 'length') {
+            throw new Error('OpenRouter response was truncated');
+          }
 
-          this.logger.error(`Raw response: ${content}`);
-
-          throw new Error(`Gemini returned invalid JSON`);
+          throw new Error('OpenRouter returned invalid JSON');
         }
 
         this.validateAIResponse(parsed, params.count);
+
+        const usage = response.usage;
+
+        if (usage) {
+          this.logger.debug(
+            `OpenRouter usage | prompt=${usage.prompt_tokens ?? 0} | completion=${usage.completion_tokens ?? 0} | total=${usage.total_tokens ?? 0}`,
+          );
+        }
 
         return parsed as AIQuizResponse;
       } catch (error) {
@@ -201,7 +200,7 @@ export class QuizBattleQuestionService {
         const retryable = this.isRetryableError(error);
 
         this.logger.warn(
-          `Gemini attempt ${attempt} failed | retryable=${retryable} | error=${
+          `OpenRouter attempt ${attempt} failed | retryable=${retryable} | error=${
             error instanceof Error ? error.message : String(error)
           }`,
         );
@@ -212,64 +211,87 @@ export class QuizBattleQuestionService {
 
         const delay = this.calculateBackoff(attempt);
 
-        this.logger.warn(`Retrying Gemini request in ${delay}ms...`);
-
         await this.sleep(delay);
       }
     }
 
-    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(String(lastError));
   }
 
   // ==========================================================
-  // GEMINI API CALL
+  // OPENROUTER API CALL
   // ==========================================================
 
   private async generateContentWithTimeout(
     systemPrompt: string,
     userPrompt: string,
-  ): Promise<string> {
+  ): Promise<OpenRouterResponse> {
     const controller = new AbortController();
 
-    const timeout = setTimeout(() => {
-      controller.abort();
-    }, this.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
-      const responsePromise = this.ai.models.generateContent({
-        model: this.model,
-
-        contents: userPrompt,
-
-        config: {
-          systemInstruction: systemPrompt,
-
-          temperature: 0.7,
-
-          maxOutputTokens: 8000,
-
-          // Force Gemini to return raw JSON,
-          // no markdown fences.
-          responseMimeType: 'application/json',
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+          ...(process.env.OPENROUTER_SITE_URL
+            ? { 'HTTP-Referer': process.env.OPENROUTER_SITE_URL }
+            : {}),
+          ...(process.env.OPENROUTER_APP_NAME
+            ? { 'X-Title': process.env.OPENROUTER_APP_NAME }
+            : {}),
         },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [
+            {
+              role: 'system',
+              content: systemPrompt,
+            },
+            {
+              role: 'user',
+              content: userPrompt,
+            },
+          ],
+          temperature: 0.4,
+          response_format: {
+            type: 'json_object',
+          },
+          stream: false,
+        }),
+        signal: controller.signal,
       });
 
-      const timeoutPromise = new Promise<never>((_resolve, reject) => {
-        controller.signal.addEventListener('abort', () => {
-          reject(
-            new Error(`Gemini request timed out after ${this.timeoutMs}ms`),
-          );
-        });
-      });
+      const rawText = await response.text();
 
-      const response = await Promise.race([responsePromise, timeoutPromise]);
+      let data: OpenRouterResponse;
 
-      const text = response.text;
+      try {
+        data = JSON.parse(rawText) as OpenRouterResponse;
+      } catch {
+        throw new Error(
+          `OpenRouter returned invalid API response | status=${response.status}`,
+        );
+      }
 
-      return typeof text === 'string' ? text : '';
+      if (!response.ok) {
+        const message =
+          data.error?.message ||
+          `OpenRouter request failed with HTTP ${response.status}`;
+
+        throw new Error(`OpenRouter ${response.status}: ${message}`);
+      }
+
+      return data;
     } catch (error) {
-      if (error instanceof Error && error.message.includes('timed out')) {
-        throw error;
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(
+          `OpenRouter request timed out after ${this.timeoutMs}ms`,
+        );
       }
 
       throw error;
@@ -279,7 +301,7 @@ export class QuizBattleQuestionService {
   }
 
   // ==========================================================
-  // SYSTEM PROMPT
+  // PROMPTS
   // ==========================================================
 
   private buildSystemPrompt(params: {
@@ -288,125 +310,35 @@ export class QuizBattleQuestionService {
     topic: string;
     mode: string;
   }): string {
-    return `
-You are the QuizBattle AI question generator.
-
-Generate high-quality multiple-choice questions.
-
-STRICT OUTPUT RULE:
-
-Return ONLY valid JSON.
-
-Do NOT return markdown.
-Do NOT return a code block.
-Do NOT return explanations outside JSON.
-Do NOT return any introductory text.
-Do NOT return any text before or after the JSON.
-
-The response MUST be directly parseable by JSON.parse().
-
-The JSON MUST have exactly this structure:
-
-{
-  "questions": [
-    {
-      "question": "Question text",
-      "options": [
-        "Option 1",
-        "Option 2",
-        "Option 3",
-        "Option 4"
-      ],
-      "correctOptionIndex": 0,
-      "explanation": "Short factual explanation."
-    }
-  ]
-}
-
-==================================================
-REQUIREMENTS
-==================================================
-
-Generate EXACTLY ${params.count} questions.
-
-Each question MUST have:
-
-- question
-- exactly 4 options
-- correctOptionIndex
-- explanation
-
-correctOptionIndex MUST be:
-
-0, 1, 2, or 3
-
-There must be exactly ONE correct answer.
-
-Do NOT use:
-
-- All of the above
-- None of the above
-- Multiple correct answers
-- Ambiguous answers
-- Subjective answers
-- Duplicate options
-- Duplicate questions
-
-==================================================
-DIFFICULTY
-==================================================
-
-${params.difficulty}
-
-EASY:
-Simple/common knowledge.
-
-MEDIUM:
-Requires moderate knowledge or reasoning.
-
-HARD:
-Requires deeper knowledge.
-
-==================================================
-TOPIC
-==================================================
-
-${params.topic}
-
-==================================================
-GAME MODE
-==================================================
-
-${params.mode}
-
-==================================================
-QUESTION QUALITY
-==================================================
-
-Questions must be:
-
-- factual
-- clear
-- unambiguous
-- suitable for multiplayer quiz
-- grammatically correct
-- relevant to the topic
-
-==================================================
-FINAL RULE
-==================================================
-
-Return ONLY the JSON object.
-
-No markdown.
-No code fences.
-No additional text.
-`.trim();
+    return [
+      'Generate high-quality multiple-choice quiz questions.',
+      '',
+      'Return ONLY one valid JSON object. No markdown or extra text.',
+      '',
+      `Generate exactly ${params.count} questions.`,
+      `Difficulty: ${params.difficulty}.`,
+      `Topic: ${params.topic}.`,
+      `Mode: ${params.mode}.`,
+      '',
+      'Each question must contain:',
+      '- question: clear factual question',
+      '- options: exactly 4 unique strings',
+      '- correctOptionIndex: integer 0-3',
+      '- explanation: short factual explanation',
+      '',
+      'Rules:',
+      '- exactly one correct answer',
+      '- no duplicate questions',
+      '- no duplicate options',
+      '- no ambiguous or subjective questions',
+      '- no "all of the above"',
+      '- no "none of the above"',
+      '- keep explanations short',
+      '',
+      'JSON shape:',
+      '{"questions":[{"question":"...","options":["...","...","...","..."],"correctOptionIndex":0,"explanation":"..."}]}',
+    ].join('\n');
   }
-
-  // ==========================================================
-  // USER PROMPT
-  // ==========================================================
 
   private buildUserPrompt(params: {
     count: number;
@@ -415,69 +347,54 @@ No additional text.
     prompt: string;
     mode: string;
   }): string {
-    return `
-Generate ${params.count} ${params.difficulty} quiz questions.
+    const additionalInstructions = params.prompt
+      ? `\nAdditional instructions: ${params.prompt}`
+      : '';
 
-Topic:
-${params.topic}
-
-Game mode:
-${params.mode}
-
-Additional instructions:
-${params.prompt || 'None'}
-
-Requirements:
-
-- Exactly ${params.count} questions
-- Exactly 4 options per question
-- Exactly one correct option
-- correctOptionIndex must be 0, 1, 2, or 3
-- Every question must have an explanation
-- No duplicate questions
-- No duplicate options
-- No "all of the above"
-- No "none of the above"
-- No markdown
-- Return ONLY JSON
-
-Return the JSON now.
-`.trim();
+    return `Generate ${params.count} ${params.difficulty} MCQ questions for "${params.topic}" in "${params.mode}" mode.${additionalInstructions}`;
   }
 
   // ==========================================================
-  // JSON CLEANER
+  // RESPONSE HELPERS
   // ==========================================================
+
+  private extractContent(response: OpenRouterResponse): string {
+    const content = response.choices?.[0]?.message?.content;
+
+    if (typeof content === 'string') {
+      return content.trim();
+    }
+
+    return '';
+  }
 
   private cleanJsonResponse(content: string): string {
     let text = content.trim();
 
-    // Remove ```json
     if (text.startsWith('```json')) {
-      text = text.substring(7);
-    }
-
-    // Remove ```
-    if (text.startsWith('```')) {
-      text = text.substring(3);
+      text = text.slice(7);
+    } else if (text.startsWith('```')) {
+      text = text.slice(3);
     }
 
     if (text.endsWith('```')) {
-      text = text.substring(0, text.length - 3);
+      text = text.slice(0, -3);
     }
 
     text = text.trim();
 
-    // Find JSON object
     const firstBrace = text.indexOf('{');
-
     const lastBrace = text.lastIndexOf('}');
 
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      text = text.substring(firstBrace, lastBrace + 1);
+    if (
+      firstBrace !== -1 &&
+      lastBrace !== -1 &&
+      lastBrace > firstBrace
+    ) {
+      return text.slice(firstBrace, lastBrace + 1).trim();
     }
 
-    return text.trim();
+    return text;
   }
 
   // ==========================================================
@@ -513,11 +430,10 @@ Return the JSON now.
 
       const question = rawQuestion as Record<string, unknown>;
 
-      // --------------------------------------------------
-      // QUESTION TEXT
-      // --------------------------------------------------
-
-      if (typeof question.question !== 'string' || !question.question.trim()) {
+      if (
+        typeof question.question !== 'string' ||
+        !question.question.trim()
+      ) {
         throw new Error(`Question ${index + 1} has invalid text`);
       }
 
@@ -526,21 +442,19 @@ Return the JSON now.
       );
 
       if (questionSet.has(normalizedQuestion)) {
-        throw new Error(`Duplicate question detected: ${question.question}`);
+        throw new Error(`Duplicate question detected`);
       }
 
       questionSet.add(normalizedQuestion);
-
-      // --------------------------------------------------
-      // OPTIONS
-      // --------------------------------------------------
 
       if (!Array.isArray(question.options)) {
         throw new Error(`Question ${index + 1} has no options`);
       }
 
       if (question.options.length !== 4) {
-        throw new Error(`Question ${index + 1} must have exactly 4 options`);
+        throw new Error(
+          `Question ${index + 1} must have exactly 4 options`,
+        );
       }
 
       const optionSet = new Set<string>();
@@ -555,31 +469,24 @@ Return the JSON now.
         const normalizedOption = this.normalizeForDuplicateCheck(option);
 
         if (optionSet.has(normalizedOption)) {
-          throw new Error(`Question ${index + 1} contains duplicate options`);
+          throw new Error(
+            `Question ${index + 1} contains duplicate options`,
+          );
         }
 
         optionSet.add(normalizedOption);
       });
 
-      // --------------------------------------------------
-      // CORRECT OPTION
-      // --------------------------------------------------
-
-      if (typeof question.correctOptionIndex !== 'number') {
-        throw new Error(`Question ${index + 1} has invalid correctOptionIndex`);
-      }
-
       if (
+        typeof question.correctOptionIndex !== 'number' ||
         !Number.isInteger(question.correctOptionIndex) ||
         question.correctOptionIndex < 0 ||
         question.correctOptionIndex > 3
       ) {
-        throw new Error(`Question ${index + 1} correctOptionIndex must be 0-3`);
+        throw new Error(
+          `Question ${index + 1} correctOptionIndex must be 0-3`,
+        );
       }
-
-      // --------------------------------------------------
-      // EXPLANATION
-      // --------------------------------------------------
 
       if (
         typeof question.explanation !== 'string' ||
@@ -591,7 +498,7 @@ Return the JSON now.
   }
 
   // ==========================================================
-  // TRANSFORM AI QUESTION -> RoomQuestion
+  // TRANSFORM
   // ==========================================================
 
   private transformQuestions(
@@ -599,12 +506,15 @@ Return the JSON now.
     difficulty: Difficulty,
     topic: string,
   ): RoomQuestion[] {
-    return aiQuestions.map((aiQuestion, questionIndex) => {
-      const options: any[] = aiQuestion.options.map((text, optionIndex) => ({
-        id: this.generateOptionId(questionIndex, optionIndex),
+    const settings = this.getDifficultySettings(difficulty);
 
-        text: text.trim(),
-      }));
+    return aiQuestions.map((aiQuestion, questionIndex) => {
+      const options: any[] = aiQuestion.options.map(
+        (text, optionIndex) => ({
+          id: this.generateOptionId(questionIndex, optionIndex),
+          text: text.trim(),
+        }),
+      );
 
       const correctOption = options[aiQuestion.correctOptionIndex];
 
@@ -614,42 +524,19 @@ Return the JSON now.
         );
       }
 
-      const settings = this.getDifficultySettings(difficulty);
-
       const question: RoomQuestion = {
         id: this.generateQuestionId(questionIndex),
-
         index: questionIndex,
-
         type: 'MCQ',
-
         difficulty,
-
         topic,
-
         question: aiQuestion.question.trim(),
-
         media: null,
-
         options,
-
-        /**
-         * IMPORTANT:
-         *
-         * Keep this only on the SERVER.
-         *
-         * Never send correctOptionId
-         * to the client in the active
-         * question payload.
-         */
         correctOptionId: correctOption.id,
-
         points: settings.points,
-
         timeLimitSeconds: settings.timeLimitSeconds,
-
         status: 'WAITING',
-
         explanation: aiQuestion.explanation.trim(),
       };
 
@@ -658,7 +545,7 @@ Return the JSON now.
   }
 
   // ==========================================================
-  // DIFFICULTY SETTINGS
+  // DIFFICULTY
   // ==========================================================
 
   private getDifficultySettings(difficulty: Difficulty): {
@@ -688,7 +575,7 @@ Return the JSON now.
   }
 
   // ==========================================================
-  // ID GENERATORS
+  // IDS
   // ==========================================================
 
   private generateQuestionId(index: number): string {
@@ -696,17 +583,20 @@ Return the JSON now.
       'question',
       Date.now(),
       index,
-      Math.random().toString(36).substring(2, 8),
+      Math.random().toString(36).slice(2, 8),
     ].join('_');
   }
 
-  private generateOptionId(questionIndex: number, optionIndex: number): string {
+  private generateOptionId(
+    questionIndex: number,
+    optionIndex: number,
+  ): string {
     return [
       'option',
       Date.now(),
       questionIndex,
       optionIndex,
-      Math.random().toString(36).substring(2, 8),
+      Math.random().toString(36).slice(2, 8),
     ].join('_');
   }
 
@@ -764,7 +654,6 @@ Return the JSON now.
         ? error.message.toLowerCase()
         : String(error).toLowerCase();
 
-    // Timeout
     if (
       message.includes('timeout') ||
       message.includes('timed out') ||
@@ -773,45 +662,39 @@ Return the JSON now.
       return true;
     }
 
-    // Network
     if (
       message.includes('econnreset') ||
       message.includes('socket hang up') ||
-      message.includes('network')
+      message.includes('network') ||
+      message.includes('fetch failed')
     ) {
       return true;
     }
 
-    // Temporary HTTP / quota errors
     if (
+      message.includes('408') ||
+      message.includes('409') ||
       message.includes('429') ||
       message.includes('500') ||
       message.includes('502') ||
       message.includes('503') ||
       message.includes('504') ||
       message.includes('rate limit') ||
-      message.includes('resource_exhausted') ||
-      message.includes('temporarily unavailable')
+      message.includes('temporarily unavailable') ||
+      message.includes('truncated')
     ) {
       return true;
-    }
-
-    // Invalid model response
-    if (message.includes('invalid json') || message.includes('user safety:')) {
-      return false;
     }
 
     return false;
   }
 
   private calculateBackoff(attempt: number): number {
-    const base = 1000;
-
+    const base = 800;
     const exponential = base * Math.pow(2, attempt - 1);
+    const jitter = Math.floor(Math.random() * 300);
 
-    const jitter = Math.floor(Math.random() * 500);
-
-    return Math.min(8000, exponential + jitter);
+    return Math.min(5000, exponential + jitter);
   }
 
   private async sleep(milliseconds: number): Promise<void> {

@@ -849,7 +849,6 @@ const quiz_battle_question_service_1 = __webpack_require__(/*! ./services/quiz-b
 const quiz_battle_ranking_service_1 = __webpack_require__(/*! ./services/quiz-battle-ranking.service */ "./apps/quiz-battle-service/src/services/quiz-battle-ranking.service.ts");
 const player_game_state_service_1 = __webpack_require__(/*! ./services/player.game.state.service */ "./apps/quiz-battle-service/src/services/player.game.state.service.ts");
 const events_service_1 = __webpack_require__(/*! ./events/events.service */ "./apps/quiz-battle-service/src/events/events.service.ts");
-const _Questions_1 = __webpack_require__(/*! ./services/_Questions */ "./apps/quiz-battle-service/src/services/_Questions.ts");
 let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
     redisService;
     questionService;
@@ -1050,7 +1049,13 @@ let QuizBattleService = QuizBattleService_1 = class QuizBattleService {
                 answeredQuestionIds: new Set(),
                 allQuestionsAnswered: false,
             };
-            const questions = _Questions_1._Questions;
+            const questions = await this.questionService.generateQuestions({
+                topic: room.topic,
+                difficulty: room.difficulty,
+                numberOfQuestions: room.numberOfQuestions,
+                prompt: room.prompt,
+                mode: room.mode,
+            });
             if (!questions.length) {
                 this.logger.warn('No questions generated for the room');
                 onError?.('No questions available for the selected topic and difficulty');
@@ -1583,341 +1588,6 @@ exports.QuizBattleService = QuizBattleService = QuizBattleService_1 = __decorate
 
 /***/ },
 
-/***/ "./apps/quiz-battle-service/src/services/_Questions.ts"
-/*!*************************************************************!*\
-  !*** ./apps/quiz-battle-service/src/services/_Questions.ts ***!
-  \*************************************************************/
-(__unused_webpack_module, exports) {
-
-
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports._Questions = void 0;
-exports._Questions = [
-    {
-        "id": "question_1790361992593_0_3sqfnt",
-        "index": 0,
-        "type": "MCQ",
-        "difficulty": "MEDIUM",
-        "topic": "General Knowledge",
-        "question": "Which planet is known as the Red Planet?",
-        "media": null,
-        "options": [
-            {
-                "id": "option_1790361992593_0_0_va3yaz",
-                "text": "Venus"
-            },
-            {
-                "id": "option_1790361992593_0_1_izhrqf",
-                "text": "Mars"
-            },
-            {
-                "id": "option_1790361992593_0_2_dlud9h",
-                "text": "Jupiter"
-            },
-            {
-                "id": "option_1790361992593_0_3_lst72t",
-                "text": "Saturn"
-            }
-        ],
-        "correctOptionId": "option_1790361992593_0_1_izhrqf",
-        "points": 20,
-        "timeLimitSeconds": 20,
-        "status": "WAITING",
-        "explanation": "Mars is called the Red Planet because iron minerals in its soil oxidize, or rust, causing the soil and atmosphere to look red."
-    },
-    {
-        "id": "question_1790361992593_1_j7xkjb",
-        "index": 1,
-        "type": "MCQ",
-        "difficulty": "MEDIUM",
-        "topic": "General Knowledge",
-        "question": "What is the largest ocean on Earth?",
-        "media": null,
-        "options": [
-            {
-                "id": "option_1790361992593_1_0_wmx3li",
-                "text": "Atlantic Ocean"
-            },
-            {
-                "id": "option_1790361992593_1_1_1vweqj",
-                "text": "Indian Ocean"
-            },
-            {
-                "id": "option_1790361992593_1_2_yvq0cj",
-                "text": "Arctic Ocean"
-            },
-            {
-                "id": "option_1790361992593_1_3_x00mds",
-                "text": "Pacific Ocean"
-            }
-        ],
-        "correctOptionId": "option_1790361992593_1_3_x00mds",
-        "points": 20,
-        "timeLimitSeconds": 20,
-        "status": "WAITING",
-        "explanation": "The Pacific Ocean is the largest and deepest ocean on Earth, covering more than 60 million square miles."
-    },
-    {
-        "id": "question_1790361992593_2_d0mqqv",
-        "index": 2,
-        "type": "MCQ",
-        "difficulty": "MEDIUM",
-        "topic": "General Knowledge",
-        "question": "Who wrote the play 'Romeo and Juliet'?",
-        "media": null,
-        "options": [
-            {
-                "id": "option_1790361992593_2_0_9iv168",
-                "text": "Charles Dickens"
-            },
-            {
-                "id": "option_1790361992593_2_1_6r9wfs",
-                "text": "William Shakespeare"
-            },
-            {
-                "id": "option_1790361992593_2_2_8r8tgo",
-                "text": "Jane Austen"
-            },
-            {
-                "id": "option_1790361992593_2_3_km2d0r",
-                "text": "Mark Twain"
-            }
-        ],
-        "correctOptionId": "option_1790361992593_2_1_6r9wfs",
-        "points": 20,
-        "timeLimitSeconds": 20,
-        "status": "WAITING",
-        "explanation": "William Shakespeare wrote the tragedy 'Romeo and Juliet' around 1595."
-    },
-    {
-        "id": "question_1790361992593_3_emboor",
-        "index": 3,
-        "type": "MCQ",
-        "difficulty": "MEDIUM",
-        "topic": "General Knowledge",
-        "question": "What is the capital city of Japan?",
-        "media": null,
-        "options": [
-            {
-                "id": "option_1790361992593_3_0_rfj0a2",
-                "text": "Osaka"
-            },
-            {
-                "id": "option_1790361992593_3_1_m05ydh",
-                "text": "Kyoto"
-            },
-            {
-                "id": "option_1790361992593_3_2_a0t27y",
-                "text": "Tokyo"
-            },
-            {
-                "id": "option_1790361992593_3_3_tifz7n",
-                "text": "Nagoya"
-            }
-        ],
-        "correctOptionId": "option_1790361992593_3_2_a0t27y",
-        "points": 20,
-        "timeLimitSeconds": 20,
-        "status": "WAITING",
-        "explanation": "Tokyo has been the capital of Japan since 1868, when Emperor Meiji moved the capital from Kyoto."
-    },
-    {
-        "id": "question_1790361992593_4_rft887",
-        "index": 4,
-        "type": "MCQ",
-        "difficulty": "MEDIUM",
-        "topic": "General Knowledge",
-        "question": "Which gas do plants primarily absorb from the atmosphere for photosynthesis?",
-        "media": null,
-        "options": [
-            {
-                "id": "option_1790361992593_4_0_8yo2jv",
-                "text": "Oxygen"
-            },
-            {
-                "id": "option_1790361992593_4_1_f7kzj3",
-                "text": "Nitrogen"
-            },
-            {
-                "id": "option_1790361992593_4_2_tfs7f1",
-                "text": "Carbon Dioxide"
-            },
-            {
-                "id": "option_1790361992593_4_3_i3n7kq",
-                "text": "Hydrogen"
-            }
-        ],
-        "correctOptionId": "option_1790361992593_4_2_tfs7f1",
-        "points": 20,
-        "timeLimitSeconds": 20,
-        "status": "WAITING",
-        "explanation": "Plants absorb carbon dioxide (CO2) from the atmosphere and use it, along with water and sunlight, to produce glucose during photosynthesis."
-    },
-    {
-        "id": "question_1790361992593_5_k9m2xp",
-        "index": 5,
-        "type": "MCQ",
-        "difficulty": "MEDIUM",
-        "topic": "General Knowledge",
-        "question": "Who was the first person to walk on the Moon?",
-        "media": null,
-        "options": [
-            {
-                "id": "option_1790361992593_5_0_q1w2e3",
-                "text": "Buzz Aldrin"
-            },
-            {
-                "id": "option_1790361992593_5_1_r4t5y6",
-                "text": "Yuri Gagarin"
-            },
-            {
-                "id": "option_1790361992593_5_2_u7i8o9",
-                "text": "Neil Armstrong"
-            },
-            {
-                "id": "option_1790361992593_5_3_p0a1s2",
-                "text": "Michael Collins"
-            }
-        ],
-        "correctOptionId": "option_1790361992593_5_2_u7i8o9",
-        "points": 20,
-        "timeLimitSeconds": 20,
-        "status": "WAITING",
-        "explanation": "Neil Armstrong became the first human to walk on the Moon on July 20, 1969, during the Apollo 11 mission."
-    },
-    {
-        "id": "question_1790361992593_6_d3f4g5",
-        "index": 6,
-        "type": "MCQ",
-        "difficulty": "MEDIUM",
-        "topic": "General Knowledge",
-        "question": "What is the smallest country in the world by land area?",
-        "media": null,
-        "options": [
-            {
-                "id": "option_1790361992593_6_0_h6j7k8",
-                "text": "Monaco"
-            },
-            {
-                "id": "option_1790361992593_6_1_l9m0n1",
-                "text": "Nauru"
-            },
-            {
-                "id": "option_1790361992593_6_2_o2p3q4",
-                "text": "Vatican City"
-            },
-            {
-                "id": "option_1790361992593_6_3_r5s6t7",
-                "text": "San Marino"
-            }
-        ],
-        "correctOptionId": "option_1790361992593_6_2_o2p3q4",
-        "points": 20,
-        "timeLimitSeconds": 20,
-        "status": "WAITING",
-        "explanation": "Vatican City is the smallest country in the world, with an area of approximately 44 hectares (110 acres)."
-    },
-    {
-        "id": "question_1790361992593_7_u8v9w0",
-        "index": 7,
-        "type": "MCQ",
-        "difficulty": "MEDIUM",
-        "topic": "General Knowledge",
-        "question": "Which element has the chemical symbol 'Au'?",
-        "media": null,
-        "options": [
-            {
-                "id": "option_1790361992593_7_0_x1y2z3",
-                "text": "Silver"
-            },
-            {
-                "id": "option_1790361992593_7_1_a4b5c6",
-                "text": "Gold"
-            },
-            {
-                "id": "option_1790361992593_7_2_d7e8f9",
-                "text": "Aluminum"
-            },
-            {
-                "id": "option_1790361992593_7_3_g0h1i2",
-                "text": "Argon"
-            }
-        ],
-        "correctOptionId": "option_1790361992593_7_1_a4b5c6",
-        "points": 20,
-        "timeLimitSeconds": 20,
-        "status": "WAITING",
-        "explanation": "The chemical symbol 'Au' comes from the Latin word 'aurum', which means gold."
-    },
-    {
-        "id": "question_1790361992593_8_j3k4l5",
-        "index": 8,
-        "type": "MCQ",
-        "difficulty": "MEDIUM",
-        "topic": "General Knowledge",
-        "question": "How many continents are there on Earth?",
-        "media": null,
-        "options": [
-            {
-                "id": "option_1790361992593_8_0_m6n7o8",
-                "text": "5"
-            },
-            {
-                "id": "option_1790361992593_8_1_p9q0r1",
-                "text": "6"
-            },
-            {
-                "id": "option_1790361992593_8_2_s2t3u4",
-                "text": "7"
-            },
-            {
-                "id": "option_1790361992593_8_3_v5w6x7",
-                "text": "8"
-            }
-        ],
-        "correctOptionId": "option_1790361992593_8_2_s2t3u4",
-        "points": 20,
-        "timeLimitSeconds": 20,
-        "status": "WAITING",
-        "explanation": "There are 7 continents: Asia, Africa, North America, South America, Antarctica, Europe, and Australia (Oceania)."
-    },
-    {
-        "id": "question_1790361992593_9_y8z9a0",
-        "index": 9,
-        "type": "MCQ",
-        "difficulty": "MEDIUM",
-        "topic": "General Knowledge",
-        "question": "What is the longest river in the world?",
-        "media": null,
-        "options": [
-            {
-                "id": "option_1790361992593_9_0_b1c2d3",
-                "text": "Amazon River"
-            },
-            {
-                "id": "option_1790361992593_9_1_e4f5g6",
-                "text": "Yangtze River"
-            },
-            {
-                "id": "option_1790361992593_9_2_h7i8j9",
-                "text": "Mississippi River"
-            },
-            {
-                "id": "option_1790361992593_9_3_k0l1m2",
-                "text": "Nile River"
-            }
-        ],
-        "correctOptionId": "option_1790361992593_9_3_k0l1m2",
-        "points": 20,
-        "timeLimitSeconds": 20,
-        "status": "WAITING",
-        "explanation": "The Nile River is traditionally considered the longest river in the world, stretching about 6,650 km (4,130 miles) through northeastern Africa."
-    }
-];
-
-
-/***/ },
-
 /***/ "./apps/quiz-battle-service/src/services/player.game.state.service.ts"
 /*!****************************************************************************!*\
   !*** ./apps/quiz-battle-service/src/services/player.game.state.service.ts ***!
@@ -2013,33 +1683,32 @@ var QuizBattleQuestionService_1;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.QuizBattleQuestionService = void 0;
 const common_1 = __webpack_require__(/*! @nestjs/common */ "@nestjs/common");
-const genai_1 = __webpack_require__(/*! @google/genai */ "@google/genai");
 let QuizBattleQuestionService = QuizBattleQuestionService_1 = class QuizBattleQuestionService {
     logger = new common_1.Logger(QuizBattleQuestionService_1.name);
-    ai;
+    apiKey;
     model;
+    baseUrl;
     maxRetries;
     timeoutMs;
     constructor() {
-        const apiKey = process.env.GEMINI_API_KEY;
+        const apiKey = process.env.OPENROUTER_API_KEY;
         if (!apiKey) {
-            throw new Error('GEMINI_API_KEY is not configured');
+            throw new Error('OPENROUTER_API_KEY is not configured');
         }
-        this.model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-        this.maxRetries = Math.max(1, Number(process.env.GEMINI_MAX_RETRIES || 2));
-        this.timeoutMs = Math.max(10_000, Number(process.env.GEMINI_TIMEOUT_MS || 60_000));
-        this.ai = new genai_1.GoogleGenAI({
-            apiKey,
-        });
-        this.logger.log(`Gemini initialized | model=${this.model} | retries=${this.maxRetries} | timeout=${this.timeoutMs}ms`);
+        this.apiKey = apiKey;
+        this.model = process.env.OPENROUTER_MODEL || 'openrouter/free';
+        this.baseUrl =
+            process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+        this.maxRetries = Math.max(1, Number(process.env.OPENROUTER_MAX_RETRIES || 2));
+        this.timeoutMs = Math.max(10_000, Number(process.env.OPENROUTER_TIMEOUT_MS || 60_000));
+        this.logger.log(`OpenRouter initialized | model=${this.model} | retries=${this.maxRetries} | timeout=${this.timeoutMs}ms`);
     }
-    async generateQuestions(options = {}, room) {
+    async generateQuestions(options = {}, _room) {
         const count = this.normalizeCount(options.count);
         const difficulty = this.normalizeDifficulty(options.difficulty);
         const topic = this.cleanText(options.topic) || 'General Knowledge';
         const prompt = this.cleanText(options.prompt) || '';
         const mode = this.cleanText(options.mode) || 'STANDARD';
-        const numberOfQuestions = options.numberOfQuestions ?? 5;
         this.logger.log(`Generating quiz | count=${count} | difficulty=${difficulty} | topic="${topic}" | mode="${mode}"`);
         try {
             const aiResponse = await this.requestQuestionsFromAI({
@@ -2048,7 +1717,6 @@ let QuizBattleQuestionService = QuizBattleQuestionService_1 = class QuizBattleQu
                 topic,
                 prompt,
                 mode,
-                numberOfQuestions,
             });
             const questions = this.transformQuestions(aiResponse.questions, difficulty, topic);
             if (questions.length !== count) {
@@ -2058,7 +1726,7 @@ let QuizBattleQuestionService = QuizBattleQuestionService_1 = class QuizBattleQu
             return questions;
         }
         catch (error) {
-            this.logger.error('Gemini quiz generation failed', error instanceof Error ? error.stack : String(error));
+            this.logger.error('OpenRouter quiz generation failed', error instanceof Error ? error.stack : String(error));
             throw new common_1.InternalServerErrorException('Unable to generate quiz questions right now. Please try again.');
         }
     }
@@ -2068,70 +1736,99 @@ let QuizBattleQuestionService = QuizBattleQuestionService_1 = class QuizBattleQu
         let lastError;
         for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
             try {
-                this.logger.log(`Gemini request attempt ${attempt}/${this.maxRetries}`);
-                const content = await this.generateContentWithTimeout(systemPrompt, userPrompt);
-                this.logger.debug(`Gemini response length: ${content.length}`);
-                if (!content.trim()) {
-                    throw new Error('Gemini returned an empty response');
-                }
-                if (content.trim().toLowerCase().startsWith('user safety:')) {
-                    throw new Error(`Gemini returned a safety response instead of quiz JSON: ${content}`);
+                this.logger.log(`OpenRouter request attempt ${attempt}/${this.maxRetries}`);
+                const response = await this.generateContentWithTimeout(systemPrompt, userPrompt);
+                const content = this.extractContent(response);
+                if (!content) {
+                    throw new Error('OpenRouter returned an empty response');
                 }
                 const jsonText = this.cleanJsonResponse(content);
                 let parsed;
                 try {
                     parsed = JSON.parse(jsonText);
                 }
-                catch (error) {
-                    this.logger.error(`Invalid JSON returned by Gemini`);
-                    this.logger.error(`Raw response: ${content}`);
-                    throw new Error(`Gemini returned invalid JSON`);
+                catch {
+                    if (response.choices?.[0]?.finish_reason === 'length') {
+                        throw new Error('OpenRouter response was truncated');
+                    }
+                    throw new Error('OpenRouter returned invalid JSON');
                 }
                 this.validateAIResponse(parsed, params.count);
+                const usage = response.usage;
+                if (usage) {
+                    this.logger.debug(`OpenRouter usage | prompt=${usage.prompt_tokens ?? 0} | completion=${usage.completion_tokens ?? 0} | total=${usage.total_tokens ?? 0}`);
+                }
                 return parsed;
             }
             catch (error) {
                 lastError = error;
                 const retryable = this.isRetryableError(error);
-                this.logger.warn(`Gemini attempt ${attempt} failed | retryable=${retryable} | error=${error instanceof Error ? error.message : String(error)}`);
+                this.logger.warn(`OpenRouter attempt ${attempt} failed | retryable=${retryable} | error=${error instanceof Error ? error.message : String(error)}`);
                 if (!retryable || attempt >= this.maxRetries) {
                     break;
                 }
                 const delay = this.calculateBackoff(attempt);
-                this.logger.warn(`Retrying Gemini request in ${delay}ms...`);
                 await this.sleep(delay);
             }
         }
-        throw lastError instanceof Error ? lastError : new Error(String(lastError));
+        throw lastError instanceof Error
+            ? lastError
+            : new Error(String(lastError));
     }
     async generateContentWithTimeout(systemPrompt, userPrompt) {
         const controller = new AbortController();
-        const timeout = setTimeout(() => {
-            controller.abort();
-        }, this.timeoutMs);
+        const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
         try {
-            const responsePromise = this.ai.models.generateContent({
-                model: this.model,
-                contents: userPrompt,
-                config: {
-                    systemInstruction: systemPrompt,
-                    temperature: 0.7,
-                    maxOutputTokens: 8000,
-                    responseMimeType: 'application/json',
+            const response = await fetch(`${this.baseUrl}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${this.apiKey}`,
+                    'Content-Type': 'application/json',
+                    ...(process.env.OPENROUTER_SITE_URL
+                        ? { 'HTTP-Referer': process.env.OPENROUTER_SITE_URL }
+                        : {}),
+                    ...(process.env.OPENROUTER_APP_NAME
+                        ? { 'X-Title': process.env.OPENROUTER_APP_NAME }
+                        : {}),
                 },
+                body: JSON.stringify({
+                    model: this.model,
+                    messages: [
+                        {
+                            role: 'system',
+                            content: systemPrompt,
+                        },
+                        {
+                            role: 'user',
+                            content: userPrompt,
+                        },
+                    ],
+                    temperature: 0.4,
+                    response_format: {
+                        type: 'json_object',
+                    },
+                    stream: false,
+                }),
+                signal: controller.signal,
             });
-            const timeoutPromise = new Promise((_resolve, reject) => {
-                controller.signal.addEventListener('abort', () => {
-                    reject(new Error(`Gemini request timed out after ${this.timeoutMs}ms`));
-                });
-            });
-            const response = await Promise.race([responsePromise, timeoutPromise]);
-            const text = response.text;
-            return typeof text === 'string' ? text : '';
+            const rawText = await response.text();
+            let data;
+            try {
+                data = JSON.parse(rawText);
+            }
+            catch {
+                throw new Error(`OpenRouter returned invalid API response | status=${response.status}`);
+            }
+            if (!response.ok) {
+                const message = data.error?.message ||
+                    `OpenRouter request failed with HTTP ${response.status}`;
+                throw new Error(`OpenRouter ${response.status}: ${message}`);
+            }
+            return data;
         }
         catch (error) {
-            if (error instanceof Error && error.message.includes('timed out')) {
-                throw error;
+            if (error instanceof Error && error.name === 'AbortError') {
+                throw new Error(`OpenRouter request timed out after ${this.timeoutMs}ms`);
             }
             throw error;
         }
@@ -2140,169 +1837,68 @@ let QuizBattleQuestionService = QuizBattleQuestionService_1 = class QuizBattleQu
         }
     }
     buildSystemPrompt(params) {
-        return `
-You are the QuizBattle AI question generator.
-
-Generate high-quality multiple-choice questions.
-
-STRICT OUTPUT RULE:
-
-Return ONLY valid JSON.
-
-Do NOT return markdown.
-Do NOT return a code block.
-Do NOT return explanations outside JSON.
-Do NOT return any introductory text.
-Do NOT return any text before or after the JSON.
-
-The response MUST be directly parseable by JSON.parse().
-
-The JSON MUST have exactly this structure:
-
-{
-  "questions": [
-    {
-      "question": "Question text",
-      "options": [
-        "Option 1",
-        "Option 2",
-        "Option 3",
-        "Option 4"
-      ],
-      "correctOptionIndex": 0,
-      "explanation": "Short factual explanation."
-    }
-  ]
-}
-
-==================================================
-REQUIREMENTS
-==================================================
-
-Generate EXACTLY ${params.count} questions.
-
-Each question MUST have:
-
-- question
-- exactly 4 options
-- correctOptionIndex
-- explanation
-
-correctOptionIndex MUST be:
-
-0, 1, 2, or 3
-
-There must be exactly ONE correct answer.
-
-Do NOT use:
-
-- All of the above
-- None of the above
-- Multiple correct answers
-- Ambiguous answers
-- Subjective answers
-- Duplicate options
-- Duplicate questions
-
-==================================================
-DIFFICULTY
-==================================================
-
-${params.difficulty}
-
-EASY:
-Simple/common knowledge.
-
-MEDIUM:
-Requires moderate knowledge or reasoning.
-
-HARD:
-Requires deeper knowledge.
-
-==================================================
-TOPIC
-==================================================
-
-${params.topic}
-
-==================================================
-GAME MODE
-==================================================
-
-${params.mode}
-
-==================================================
-QUESTION QUALITY
-==================================================
-
-Questions must be:
-
-- factual
-- clear
-- unambiguous
-- suitable for multiplayer quiz
-- grammatically correct
-- relevant to the topic
-
-==================================================
-FINAL RULE
-==================================================
-
-Return ONLY the JSON object.
-
-No markdown.
-No code fences.
-No additional text.
-`.trim();
+        return [
+            'Generate high-quality multiple-choice quiz questions.',
+            '',
+            'Return ONLY one valid JSON object. No markdown or extra text.',
+            '',
+            `Generate exactly ${params.count} questions.`,
+            `Difficulty: ${params.difficulty}.`,
+            `Topic: ${params.topic}.`,
+            `Mode: ${params.mode}.`,
+            '',
+            'Each question must contain:',
+            '- question: clear factual question',
+            '- options: exactly 4 unique strings',
+            '- correctOptionIndex: integer 0-3',
+            '- explanation: short factual explanation',
+            '',
+            'Rules:',
+            '- exactly one correct answer',
+            '- no duplicate questions',
+            '- no duplicate options',
+            '- no ambiguous or subjective questions',
+            '- no "all of the above"',
+            '- no "none of the above"',
+            '- keep explanations short',
+            '',
+            'JSON shape:',
+            '{"questions":[{"question":"...","options":["...","...","...","..."],"correctOptionIndex":0,"explanation":"..."}]}',
+        ].join('\n');
     }
     buildUserPrompt(params) {
-        return `
-Generate ${params.count} ${params.difficulty} quiz questions.
-
-Topic:
-${params.topic}
-
-Game mode:
-${params.mode}
-
-Additional instructions:
-${params.prompt || 'None'}
-
-Requirements:
-
-- Exactly ${params.count} questions
-- Exactly 4 options per question
-- Exactly one correct option
-- correctOptionIndex must be 0, 1, 2, or 3
-- Every question must have an explanation
-- No duplicate questions
-- No duplicate options
-- No "all of the above"
-- No "none of the above"
-- No markdown
-- Return ONLY JSON
-
-Return the JSON now.
-`.trim();
+        const additionalInstructions = params.prompt
+            ? `\nAdditional instructions: ${params.prompt}`
+            : '';
+        return `Generate ${params.count} ${params.difficulty} MCQ questions for "${params.topic}" in "${params.mode}" mode.${additionalInstructions}`;
+    }
+    extractContent(response) {
+        const content = response.choices?.[0]?.message?.content;
+        if (typeof content === 'string') {
+            return content.trim();
+        }
+        return '';
     }
     cleanJsonResponse(content) {
         let text = content.trim();
         if (text.startsWith('```json')) {
-            text = text.substring(7);
+            text = text.slice(7);
         }
-        if (text.startsWith('```')) {
-            text = text.substring(3);
+        else if (text.startsWith('```')) {
+            text = text.slice(3);
         }
         if (text.endsWith('```')) {
-            text = text.substring(0, text.length - 3);
+            text = text.slice(0, -3);
         }
         text = text.trim();
         const firstBrace = text.indexOf('{');
         const lastBrace = text.lastIndexOf('}');
-        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-            text = text.substring(firstBrace, lastBrace + 1);
+        if (firstBrace !== -1 &&
+            lastBrace !== -1 &&
+            lastBrace > firstBrace) {
+            return text.slice(firstBrace, lastBrace + 1).trim();
         }
-        return text.trim();
+        return text;
     }
     validateAIResponse(response, expectedCount) {
         if (!response || typeof response !== 'object') {
@@ -2321,12 +1917,13 @@ Return the JSON now.
                 throw new Error(`Question ${index + 1} is invalid`);
             }
             const question = rawQuestion;
-            if (typeof question.question !== 'string' || !question.question.trim()) {
+            if (typeof question.question !== 'string' ||
+                !question.question.trim()) {
                 throw new Error(`Question ${index + 1} has invalid text`);
             }
             const normalizedQuestion = this.normalizeForDuplicateCheck(question.question);
             if (questionSet.has(normalizedQuestion)) {
-                throw new Error(`Duplicate question detected: ${question.question}`);
+                throw new Error(`Duplicate question detected`);
             }
             questionSet.add(normalizedQuestion);
             if (!Array.isArray(question.options)) {
@@ -2346,10 +1943,8 @@ Return the JSON now.
                 }
                 optionSet.add(normalizedOption);
             });
-            if (typeof question.correctOptionIndex !== 'number') {
-                throw new Error(`Question ${index + 1} has invalid correctOptionIndex`);
-            }
-            if (!Number.isInteger(question.correctOptionIndex) ||
+            if (typeof question.correctOptionIndex !== 'number' ||
+                !Number.isInteger(question.correctOptionIndex) ||
                 question.correctOptionIndex < 0 ||
                 question.correctOptionIndex > 3) {
                 throw new Error(`Question ${index + 1} correctOptionIndex must be 0-3`);
@@ -2361,6 +1956,7 @@ Return the JSON now.
         });
     }
     transformQuestions(aiQuestions, difficulty, topic) {
+        const settings = this.getDifficultySettings(difficulty);
         return aiQuestions.map((aiQuestion, questionIndex) => {
             const options = aiQuestion.options.map((text, optionIndex) => ({
                 id: this.generateOptionId(questionIndex, optionIndex),
@@ -2370,7 +1966,6 @@ Return the JSON now.
             if (!correctOption) {
                 throw new Error(`Invalid correct option for question ${questionIndex + 1}`);
             }
-            const settings = this.getDifficultySettings(difficulty);
             const question = {
                 id: this.generateQuestionId(questionIndex),
                 index: questionIndex,
@@ -2414,7 +2009,7 @@ Return the JSON now.
             'question',
             Date.now(),
             index,
-            Math.random().toString(36).substring(2, 8),
+            Math.random().toString(36).slice(2, 8),
         ].join('_');
     }
     generateOptionId(questionIndex, optionIndex) {
@@ -2423,7 +2018,7 @@ Return the JSON now.
             Date.now(),
             questionIndex,
             optionIndex,
-            Math.random().toString(36).substring(2, 8),
+            Math.random().toString(36).slice(2, 8),
         ].join('_');
     }
     normalizeCount(count) {
@@ -2467,29 +2062,29 @@ Return the JSON now.
         }
         if (message.includes('econnreset') ||
             message.includes('socket hang up') ||
-            message.includes('network')) {
+            message.includes('network') ||
+            message.includes('fetch failed')) {
             return true;
         }
-        if (message.includes('429') ||
+        if (message.includes('408') ||
+            message.includes('409') ||
+            message.includes('429') ||
             message.includes('500') ||
             message.includes('502') ||
             message.includes('503') ||
             message.includes('504') ||
             message.includes('rate limit') ||
-            message.includes('resource_exhausted') ||
-            message.includes('temporarily unavailable')) {
+            message.includes('temporarily unavailable') ||
+            message.includes('truncated')) {
             return true;
-        }
-        if (message.includes('invalid json') || message.includes('user safety:')) {
-            return false;
         }
         return false;
     }
     calculateBackoff(attempt) {
-        const base = 1000;
+        const base = 800;
         const exponential = base * Math.pow(2, attempt - 1);
-        const jitter = Math.floor(Math.random() * 500);
-        return Math.min(8000, exponential + jitter);
+        const jitter = Math.floor(Math.random() * 300);
+        return Math.min(5000, exponential + jitter);
     }
     async sleep(milliseconds) {
         await new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -2947,16 +2542,6 @@ exports.RedisService = RedisService = RedisService_1 = __decorate([
     __metadata("design:paramtypes", [typeof (_a = typeof config_1.ConfigService !== "undefined" && config_1.ConfigService) === "function" ? _a : Object])
 ], RedisService);
 
-
-/***/ },
-
-/***/ "@google/genai"
-/*!********************************!*\
-  !*** external "@google/genai" ***!
-  \********************************/
-(module) {
-
-module.exports = require("@google/genai");
 
 /***/ },
 

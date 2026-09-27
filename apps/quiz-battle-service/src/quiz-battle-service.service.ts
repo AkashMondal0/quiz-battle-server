@@ -326,19 +326,19 @@ export class QuizBattleService {
         allQuestionsAnswered: false,
       };
 
-      // const questions = await this.questionService.generateQuestions({
-      //   topic: room.topic,
+      const questions = await this.questionService.generateQuestions({
+        topic: room.topic,
 
-      //   difficulty: room.difficulty,
+        difficulty: room.difficulty,
 
-      //   numberOfQuestions: room.numberOfQuestions,
+        numberOfQuestions: room.numberOfQuestions,
 
-      //   prompt: room.prompt,
+        prompt: room.prompt,
 
-      //   mode: room.mode,
-      // });
+        mode: room.mode,
+      });
 
-      const questions = _Questions
+      // const questions = _Questions
 
       if (!questions.length) {
         this.logger.warn('No questions generated for the room');
